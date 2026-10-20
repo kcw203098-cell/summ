@@ -180,7 +180,288 @@
     return { texts, rest, err };
   }
 
-  const api = { YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml };
+  // ───────────── 네트워크: 요약 (화면과 서비스 워커가 함께 쓴다) ─────────────
+  const API = "https://generativelanguage.googleapis.com/v1beta";
+
+  async function fetchMeta(url) {
+    try {
+      const r = await fetch(`https://noembed.com/embed?url=${encodeURIComponent(url)}`);
+      const j = await r.json();
+      if (j && j.title) return { title: j.title, author: j.author_name || "" };
+    } catch (e) {}
+    return {};
+  }
+
+  async function apiError(r) {
+    let msg = `HTTP ${r.status}`;
+    try { const j = await r.json(); msg = (j.error && j.error.message) || msg; } catch (e) {}
+    const err = new Error(msg); err.status = r.status; return err;
+  }
+
+  // fast=true: 프레임을 5초에 1장만 보고(fps 0.2), 추론을 줄인다(thinking low)
+  function summaryBody(url, fast) {
+    const video = { file_data: { file_uri: url } };
+    const body = { contents: [{ role: "user", parts: [video, { text: PROMPT }] }] };
+    if (fast) {
+      video.video_metadata = { fps: 0.2 };
+      body.generationConfig = { thinkingConfig: { thinkingLevel: "low" } };
+    }
+    return body;
+  }
+
+  async function streamSummary({ apiKey, model, url, fast, signal, onText }) {
+    const r = await fetch(`${API}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
+      method: "POST", signal,
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify(summaryBody(url, fast)),
+    });
+    if (!r.ok) throw await apiError(r);
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "", acc = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true }).replace(/\r/g, "");
+      const { texts, rest, err } = parseSSE(buf);
+      buf = rest;
+      if (err) throw new Error(err);
+      if (texts.length) { acc += texts.join(""); onText && onText(acc); }
+    }
+    const tail = parseSSE(buf + "\n");
+    if (tail.texts.length) { acc += tail.texts.join(""); onText && onText(acc); }
+    return acc;
+  }
+
+  async function listModels(apiKey) {
+    const r = await fetch(`${API}/models?pageSize=300`, { headers: { "x-goog-api-key": apiKey } });
+    if (!r.ok) return [];
+    return (await r.json()).models || [];
+  }
+
+  const isKeyError = (e) => /api key|permission|blocked/i.test(String(e && e.message));
+  const isMissingModel = (e) => e && (e.status === 404 || /not found|not supported for/i.test(String(e.message)));
+
+  // 요약 한 건 실행. 빠른 옵션이 거부되면 기본 옵션으로, 모델이 없으면 다른 flash 모델로 다시 한다.
+  async function runSummary({ id, apiKey, model, fast, signal, onProgress, onModel, onFastRejected }) {
+    const url = `https://www.youtube.com/watch?v=${id}`;
+    const meta = await fetchMeta(url);
+    const onText = (acc) => onProgress && onProgress({ meta, url, acc });
+    onText("");
+    let m = model || "gemini-flash-latest";
+    const tryFastThenPlain = async (mm) => {
+      if (!fast) return streamSummary({ apiKey, model: mm, url, fast: false, signal, onText });
+      try {
+        return await streamSummary({ apiKey, model: mm, url, fast: true, signal, onText });
+      } catch (e) {
+        if (e.status === 400 && !isKeyError(e)) {
+          // 기본 옵션으로 성공할 때만 "빠른 모드를 지원하지 않음"으로 본다 (비공개 영상 등도 400이 올 수 있음)
+          const out = await streamSummary({ apiKey, model: mm, url, fast: false, signal, onText });
+          onFastRejected && onFastRejected();
+          return out;
+        }
+        throw e;
+      }
+    };
+    let body;
+    try {
+      body = await tryFastThenPlain(m);
+    } catch (e) {
+      if (!isMissingModel(e)) throw e;
+      const alt = pickFlash(await listModels(apiKey));
+      if (!alt || alt === m) throw e;
+      m = alt;
+      onModel && onModel(alt);
+      body = await tryFastThenPlain(m);
+    }
+    if (!String(body).trim()) throw new Error("빈 응답을 받았습니다. 다시 시도하세요.");
+    return { meta, url, body, model: m, md: buildMarkdown(meta, url, body) };
+  }
+
+  function friendly(e) {
+    const s = String((e && e.message) || e);
+    const low = s.toLowerCase();
+    if (e && e.name === "AbortError") return "요약을 멈췄습니다.";
+    if (isKeyError(e) && (e.status === 400 || e.status === 401 || e.status === 403))
+      return "API 키가 거부됐습니다. 키가 맞는지, 키 제한에 Generative Language API가 들어 있는지 확인하세요. (" + s.slice(0, 120) + ")";
+    if ((e && e.status === 429) || low.includes("quota") || low.includes("exhausted"))
+      return "사용량 한도에 걸렸습니다. 잠시 뒤 다시 하세요. (" + s.slice(0, 120) + ")";
+    if (low.includes("failed to fetch") || low.includes("network") || low.includes("load failed"))
+      return "네트워크에 연결할 수 없습니다. 인터넷 연결을 확인하세요.";
+    if (low.includes("private") || low.includes("unavailable"))
+      return "이 영상을 읽을 수 없습니다. 비공개·연령 제한·지역 제한 영상은 처리되지 않습니다. (" + s.slice(0, 120) + ")";
+    return "오류: " + s.slice(0, 300);
+  }
+
+  // ───────────── 네트워크: 음성 (TTS) ─────────────
+  function b64ToBytes(b64) {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  // 헤더 없는 16비트 PCM에 WAV 헤더를 붙인다
+  function pcmToWav(pcm, rate) {
+    const h = new DataView(new ArrayBuffer(44));
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) h.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, "RIFF"); h.setUint32(4, 36 + pcm.length, true); w(8, "WAVE");
+    w(12, "fmt "); h.setUint32(16, 16, true); h.setUint16(20, 1, true); h.setUint16(22, 1, true);
+    h.setUint32(24, rate, true); h.setUint32(28, rate * 2, true); h.setUint16(32, 2, true); h.setUint16(34, 16, true);
+    w(36, "data"); h.setUint32(40, pcm.length, true);
+    const out = new Uint8Array(44 + pcm.length);
+    out.set(new Uint8Array(h.buffer), 0);
+    out.set(pcm, 44);
+    return out;
+  }
+
+  // 응답 JSON 어디에 있든 오디오 데이터(base64)를 찾는다. 마지막 것을 돌려준다.
+  function findAudio(obj) {
+    let found = null;
+    const walk = (o) => {
+      if (!o || typeof o !== "object") return;
+      if (Array.isArray(o)) { o.forEach(walk); return; }
+      const mime = String(o.mime_type || o.mimeType || "");
+      if (typeof o.data === "string" && o.data.length > 100 && (o.type === "audio" || mime.startsWith("audio"))) {
+        found = { data: o.data, mime };
+      }
+      for (const k in o) if (k !== "data") walk(o[k]);
+    };
+    walk(obj);
+    return found;
+  }
+
+  function audioBlobFrom(found) {
+    let bytes = b64ToBytes(found.data);
+    const isWav = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46; // "RIFF"
+    if (!isWav) {
+      const m = found.mime.match(/rate=(\d+)/);
+      bytes = pcmToWav(bytes, m ? +m[1] : 24000);
+    }
+    return new Blob([bytes], { type: "audio/wav" });
+  }
+
+  // 문서상의 Interactions API를 먼저 쓰고, 안 되면 예전 generateContent 방식으로 한 번 더 시도한다
+  async function tts({ apiKey, model, voice, text, signal }) {
+    const headers = { "Content-Type": "application/json", "x-goog-api-key": apiKey };
+    let r = await fetch(`${API}/interactions`, {
+      method: "POST", signal, headers,
+      body: JSON.stringify({
+        model,
+        input: [{ type: "user_input", content: [{ type: "text", text }] }],
+        response_format: { type: "audio" },
+        generation_config: { speech_config: [{ voice }] },
+      }),
+    });
+    if (!r.ok && (r.status === 400 || r.status === 404)) {
+      r = await fetch(`${API}/models/${encodeURIComponent(model)}:generateContent`, {
+        method: "POST", signal, headers,
+        body: JSON.stringify({
+          contents: [{ parts: [{ text }] }],
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+          },
+        }),
+      });
+    }
+    if (!r.ok) throw await apiError(r);
+    const found = findAudio(await r.json());
+    if (!found) throw new Error("음성 데이터가 응답에 없습니다.");
+    return audioBlobFrom(found);
+  }
+
+  function pickTts(models) {
+    const c = (models || [])
+      .map((m) => String(m.name || "").replace(/^models\//, ""))
+      .filter((n) => n.includes("tts") && n.includes("flash"))
+      .sort().reverse();
+    const stable = c.filter((n) => !n.includes("preview") && !n.includes("lite"));
+    return stable[0] || c[0] || null;
+  }
+
+  // 요약 마크다운 → 읽을 조각들. 첫 조각은 짧게 해서 빨리 재생을 시작한다.
+  function speechChunks(md, firstMax, restMax) {
+    firstMax = firstMax || 300; restMax = restMax || 1200;
+    const clean = (s) => stripInline(s)
+      .replace(/\(\s*\d{1,2}:\d{2}(?::\d{2})?\s*\)/g, "")
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(/\s+/g, " ").trim();
+    const lines = String(md).split("\n");
+    const title = clean((lines[0] || "").replace(/^#\s+/, ""));
+    let start = lines.findIndex((l) => /^##\s/.test(l));
+    if (start < 0) start = 1;
+    const units = [];
+    if (title) units.push({ sec: -1, text: title.replace(/[.!?]?$/, ".") });
+    let sec = -1;
+    for (const l of lines.slice(start)) {
+      if (!l.trim() || /^\s*(-{3,}|\*{3,})\s*$/.test(l)) continue;
+      const h = l.match(/^(#{2,6})\s+(.*)$/);
+      let t;
+      if (h) {
+        if (h[1].length === 2) sec++;
+        t = clean(h[2]);
+        if (t && !/[.!?]$/.test(t)) t += ".";
+      } else {
+        t = clean(l.replace(/^\s*([-*+]|\d+[.)])\s+/, "").replace(/^>\s?/, ""));
+        if (t && !/[.!?。]$/.test(t)) t += ".";
+      }
+      if (t) units.push({ sec: Math.max(sec, 0), text: t });
+    }
+    const chunks = [];
+    let cur = null;
+    for (const u of units) {
+      const max = chunks.length === 0 ? firstMax : restMax;
+      if (cur && cur.text.length + u.text.length + 1 > max) { chunks.push(cur); cur = null; }
+      if (!cur) cur = { sec: u.sec, text: u.text };
+      else cur.text += " " + u.text;
+    }
+    if (cur) chunks.push(cur);
+    return chunks;
+  }
+
+  function hash(s) {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+  }
+
+  // ───────────── IndexedDB (서비스 워커와 화면이 함께 쓰는 저장소) ─────────────
+  function idbOpen() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open("ytnote", 1);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        if (!db.objectStoreNames.contains("inbox")) db.createObjectStore("inbox", { keyPath: "id" });
+        if (!db.objectStoreNames.contains("audio")) db.createObjectStore("audio", { keyPath: "id" });
+      };
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  }
+  async function idbDo(store, mode, fn) {
+    const db = await idbOpen();
+    return new Promise((res, rej) => {
+      const tx = db.transaction(store, mode);
+      const req = fn(tx.objectStore(store));
+      let out;
+      if (req) req.onsuccess = () => { out = req.result; };
+      tx.oncomplete = () => { db.close(); res(out); };
+      tx.onerror = () => { db.close(); rej(tx.error); };
+      tx.onabort = () => { db.close(); rej(tx.error); };
+    });
+  }
+  const idb = {
+    put: (store, v) => idbDo(store, "readwrite", (s) => s.put(v)),
+    get: (store, k) => idbDo(store, "readonly", (s) => s.get(k)),
+    all: (store) => idbDo(store, "readonly", (s) => s.getAll()),
+    del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
+  };
+
+  const api = {
+    YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
+    fetchMeta, runSummary, friendly, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
+  };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Core = api;
 })(typeof self !== "undefined" ? self : this);

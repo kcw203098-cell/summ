@@ -50,7 +50,7 @@ body {
   background: var(--bg); color: var(--ink);
   font: 16px/1.7 var(--font-body);
   padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px));
   -webkit-text-size-adjust: 100%;
 }
 [hidden] { display: none !important; }
@@ -137,6 +137,17 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 #bar .row { max-width: 720px; margin: 0 auto; display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 8px; }
 #bar button { padding: 0 8px; font-size: 14px; }
 #bar button.primary { flex: none; }
+#bar button:disabled { opacity: .45; }
+.player { max-width: 720px; margin: 0 auto 8px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.player .btn { height: 40px; }
+.player .play { padding: 0 14px 0 10px; gap: 6px; background: var(--accent-soft); color: var(--accent); border-color: transparent; flex: none; }
+.player .play.on { background: var(--accent); color: var(--accent-ink); }
+.player .play svg, .player .chip svg { width: 20px; height: 20px; flex: none; }
+.player .chip { padding: 0 9px; flex: none; }
+.player .rate { font: 500 13px var(--font-mono); min-width: 52px; }
+.tprog { flex: 1; min-width: 0; font: 500 12px/1.3 var(--font-mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note h2.speaking { color: var(--live); border-bottom-color: var(--live); }
+.note h2.speaking::before { content: "♪ "; }
 
 details.hist summary { cursor: pointer; font: 600 14px var(--font-display); color: var(--muted); padding-block: 6px; }
 #hist { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
@@ -150,14 +161,14 @@ details.hist summary { cursor: pointer; font: 600 14px var(--font-display); colo
 
 dialog {
   border: 1px solid var(--line); border-radius: 18px; background: var(--surface); color: var(--ink);
-  width: min(92vw, 460px); padding: 20px;
+  width: min(92vw, 460px); padding: 20px; max-height: 88vh; overflow-y: auto;
 }
 dialog::backdrop { background: rgb(0 0 0 / .45); }
 dialog h2 { font: 600 1.1rem var(--font-display); margin: 0 0 14px; }
 dialog form { display: grid; gap: 14px; }
 dialog label { display: grid; gap: 6px; font-size: 14px; font-weight: 700; }
 dialog label small { font-weight: 400; color: var(--muted); font-size: 12px; line-height: 1.5; }
-dialog input[type="text"], dialog input[type="password"] {
+dialog input[type="text"], dialog input[type="password"], dialog select {
   height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line);
   background: var(--bg); color: var(--ink); font: 14px var(--font-mono); min-width: 0;
 }
@@ -166,7 +177,7 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
 
 #toast {
   position: fixed; left: 50%; transform: translateX(-50%); z-index: 20;
-  bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(138px + env(safe-area-inset-bottom, 0px));
   background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px;
   font: 600 14px var(--font-body); box-shadow: 0 6px 20px rgb(0 0 0 / .2);
 }
@@ -214,7 +225,21 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
   </details>
 </div>
 
-<nav id="bar" hidden aria-label="복사">
+<nav id="bar" hidden aria-label="듣기와 복사">
+  <div class="player">
+    <button class="btn play" id="ttsPlay" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true" id="ttsIcon"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></svg>
+      <span id="ttsLabel">듣기</span>
+    </button>
+    <button class="btn chip" id="ttsPrev" type="button" aria-label="이전 부분" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2v14H6zM19 5.5v13L9.5 12z" fill="currentColor"/></svg>
+    </button>
+    <button class="btn chip" id="ttsNext" type="button" aria-label="다음 부분" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5h2v14h-2zM5 5.5v13L14.5 12z" fill="currentColor"/></svg>
+    </button>
+    <span class="tprog" id="ttsProg">요약을 소리로 읽어 줍니다</span>
+    <button class="btn chip rate" id="ttsRate" type="button" aria-label="재생 속도">1×</button>
+  </div>
   <div class="row">
     <button class="btn primary" id="cpMd" type="button">MD 복사</button>
     <button class="btn" id="cpTxt" type="button">텍스트</button>
@@ -234,7 +259,23 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
       <input id="sModel" type="text" autocomplete="off" placeholder="gemini-flash-latest">
       <small>틀린 이름이면 사용 가능한 flash 모델로 자동으로 바꿉니다.</small>
     </label>
+    <label class="check" for="sFast"><input id="sFast" type="checkbox"> 빠른 요약 (영상 프레임을 5초에 1장만 보고, 추론을 줄입니다. 말 위주 영상은 품질 차이가 작습니다)</label>
     <label class="check" for="sAuto"><input id="sAuto" type="checkbox"> 앱으로 돌아올 때 클립보드의 YouTube 주소를 자동으로 요약</label>
+    <label class="check" for="sNotify"><input id="sNotify" type="checkbox"> 앱 밖에 있을 때 요약이 끝나면 알림</label>
+    <label for="sVoice">읽어 주기 목소리
+      <select id="sVoice">
+        <option value="Kore">Kore · 단단한</option>
+        <option value="Charon">Charon · 차분한 설명조</option>
+        <option value="Aoede">Aoede · 가벼운</option>
+        <option value="Puck">Puck · 밝은</option>
+        <option value="Zephyr">Zephyr · 또렷한</option>
+        <option value="Fenrir">Fenrir · 힘찬</option>
+      </select>
+    </label>
+    <label for="sTts">음성 모델
+      <input id="sTts" type="text" autocomplete="off" placeholder="gemini-3.8-flash-tts">
+      <small>틀린 이름이면 사용 가능한 TTS 모델로 자동으로 바꿉니다. 만든 음성은 최근 6개 요약까지 저장해 다시 들을 때 사용량을 쓰지 않습니다.</small>
+    </label>
     <label for="sVault">옵시디언 보관함 이름
       <input id="sVault" type="text" autocomplete="off" placeholder="비우면 마지막으로 연 보관함">
     </label>
