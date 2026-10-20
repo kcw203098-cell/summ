@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>YT 요약노트</title>
+<meta name="theme-color" content="#0f6b5c" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1513" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans+KR:wght@600&family=Noto+Sans+KR:wght@400;700&display=swap">
+<style>
+/* 레이아웃: 한 손 조작 – 위는 입력, 가운데는 노트, 아래 엄지 영역에 복사 버튼 */
+:root {
+  --bg: #eef2f0;
+  --surface: #ffffff;
+  --ink: #16201d;
+  --muted: #5b6a65;
+  --line: #d6dfdb;
+  --accent: #0f6b5c;
+  --accent-ink: #ffffff;
+  --accent-soft: #dcece7;
+  --live: #c2410c;
+  --err: #b42318;
+  --font-display: "IBM Plex Sans KR", "Noto Sans KR", system-ui, sans-serif;
+  --font-body: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --r: 14px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1513; --surface: #18201d; --ink: #e5ece9; --muted: #95a59f; --line: #2a3632;
+    --accent: #52c4a9; --accent-ink: #0b1210; --accent-soft: #1b2e29; --live: #ff8f52; --err: #ff7a6b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1513; --surface: #18201d; --ink: #e5ece9; --muted: #95a59f; --line: #2a3632;
+  --accent: #52c4a9; --accent-ink: #0b1210; --accent-soft: #1b2e29; --live: #ff8f52; --err: #ff7a6b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 16px/1.7 var(--font-body);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  -webkit-text-size-adjust: 100%;
+}
+[hidden] { display: none !important; }
+.wrap {
+  max-width: 720px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 14px;
+}
+header.top {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: space-between;
+  padding-block: 12px 6px;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.brand { display: flex; align-items: center; gap: 10px; font: 600 1.15rem/1.2 var(--font-display); letter-spacing: -0.01em; }
+.brand svg { width: 28px; height: 28px; flex: none; }
+.iconbtn {
+  width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); display: grid; place-items: center; cursor: pointer;
+}
+.iconbtn svg { width: 22px; height: 22px; }
+
+.input { display: grid; gap: 10px; }
+.field { display: flex; gap: 8px; }
+.field input {
+  flex: 1; min-width: 0; height: 48px; padding: 0 14px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  font: 15px var(--font-mono);
+}
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+button.btn {
+  height: 48px; padding: 0 18px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); font: 700 15px var(--font-body); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+}
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; flex: 1; }
+button.btn:disabled { opacity: .5; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+#status { font: 500 13px/1.5 var(--font-mono); color: var(--muted); min-height: 1.5em; display: flex; align-items: center; gap: 8px; }
+#status[data-kind="live"] { color: var(--live); }
+#status[data-kind="live"]::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: pulse 1.2s infinite; flex: none; }
+#status[data-kind="ok"] { color: var(--accent); }
+#status[data-kind="warn"], #status[data-kind="err"] { color: var(--err); }
+@keyframes pulse { 50% { opacity: .25; } }
+
+.note {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 22px 20px; min-width: 0; overflow-wrap: anywhere;
+}
+.note h1 { font: 600 1.35rem/1.35 var(--font-display); margin: 0 0 12px; text-wrap: balance; letter-spacing: -0.015em; }
+.note h2 {
+  font: 600 1.05rem/1.4 var(--font-display); margin: 26px 0 8px; color: var(--accent);
+  padding-bottom: 6px; border-bottom: 1px solid var(--line);
+}
+.note h3 { font: 700 1rem/1.45 var(--font-body); margin: 20px 0 6px; }
+.note p { margin: 0 0 14px; }
+.note ul, .note ol { margin: 0 0 14px; padding-left: 1.3em; }
+.note li { margin: 4px 0; }
+.note li.d1 { margin-left: 1.2em; } .note li.d2 { margin-left: 2.4em; } .note li.d3 { margin-left: 3.6em; }
+.note h1 + ul { font-size: 13px; color: var(--muted); list-style: none; padding: 0; }
+.note h1 + ul li { margin: 0; }
+.note a { color: var(--accent); word-break: break-all; }
+.note code { font: 14px var(--font-mono); background: var(--accent-soft); padding: 1px 5px; border-radius: 5px; }
+.note blockquote { margin: 0 0 14px; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
+.note .ts { font: 500 12px var(--font-mono); color: var(--muted); background: var(--accent-soft); padding: 1px 6px; border-radius: 6px; margin-left: 4px; white-space: nowrap; }
+.note .wait { color: var(--muted); }
+.note .err { color: var(--err); }
+.note.streaming > :last-child::after { content: "▍"; color: var(--live); animation: pulse 1s infinite; }
+
+.empty { border: 1px dashed var(--line); border-radius: var(--r); padding: 22px 20px; color: var(--muted); }
+.empty ol { margin: 8px 0 0; padding-left: 1.2em; }
+.empty b { color: var(--ink); }
+
+#bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 6;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border-top: 1px solid var(--line);
+  padding: 10px max(16px, env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+}
+#bar .row { max-width: 720px; margin: 0 auto; display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 8px; }
+#bar button { padding: 0 8px; font-size: 14px; }
+#bar button.primary { flex: none; }
+
+details.hist summary { cursor: pointer; font: 600 14px var(--font-display); color: var(--muted); padding-block: 6px; }
+#hist { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
+#hist button {
+  width: 100%; text-align: left; display: flex; gap: 10px; justify-content: space-between; align-items: center;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+  color: var(--ink); font: 14px var(--font-body); cursor: pointer;
+}
+#hist .ht { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#hist .hd { flex: none; font: 12px var(--font-mono); color: var(--muted); }
+
+dialog {
+  border: 1px solid var(--line); border-radius: 18px; background: var(--surface); color: var(--ink);
+  width: min(92vw, 460px); padding: 20px;
+}
+dialog::backdrop { background: rgb(0 0 0 / .45); }
+dialog h2 { font: 600 1.1rem var(--font-display); margin: 0 0 14px; }
+dialog form { display: grid; gap: 14px; }
+dialog label { display: grid; gap: 6px; font-size: 14px; font-weight: 700; }
+dialog label small { font-weight: 400; color: var(--muted); font-size: 12px; line-height: 1.5; }
+dialog input[type="text"], dialog input[type="password"] {
+  height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--ink); font: 14px var(--font-mono); min-width: 0;
+}
+dialog .check { display: flex; gap: 10px; align-items: flex-start; font-weight: 400; }
+dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: var(--accent); }
+
+#toast {
+  position: fixed; left: 50%; transform: translateX(-50%); z-index: 20;
+  bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px;
+  font: 600 14px var(--font-body); box-shadow: 0 6px 20px rgb(0 0 0 / .2);
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="26" height="26" rx="7" fill="var(--accent)"/><path d="M12 10.5v11l8.5-5.5z" fill="var(--accent-ink)"/></svg>
+      YT 요약노트
+    </div>
+    <button class="iconbtn" id="openSet" type="button" aria-label="설정">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </header>
+
+  <section class="input" aria-label="영상 주소">
+    <div class="field">
+      <input id="url" type="url" inputmode="url" autocomplete="off" placeholder="https://youtu.be/…" aria-label="YouTube 주소">
+    </div>
+    <div class="row">
+      <button class="btn" id="paste" type="button">붙여넣기</button>
+      <button class="btn primary" id="go" type="button">요약</button>
+      <button class="btn" id="stop" type="button" hidden>멈춤</button>
+    </div>
+    <div id="status" role="status" aria-live="polite"></div>
+  </section>
+
+  <div class="empty" id="empty">
+    <b>쓰는 법</b>
+    <ol>
+      <li>YouTube 앱에서 <b>공유 → YT 요약노트</b>를 누릅니다.</li>
+      <li>또는 주소를 복사하고 이 앱으로 돌아옵니다. 주소를 자동으로 찾아 요약합니다.</li>
+      <li>요약이 끝나면 아래 버튼으로 메모장이나 옵시디언에 옮깁니다.</li>
+    </ol>
+  </div>
+
+  <article class="note" id="out" hidden></article>
+
+  <details class="hist">
+    <summary>최근 요약 <span id="histCount">0</span>개</summary>
+    <ul id="hist"></ul>
+  </details>
+</div>
+
+<nav id="bar" hidden aria-label="복사">
+  <div class="row">
+    <button class="btn primary" id="cpMd" type="button">MD 복사</button>
+    <button class="btn" id="cpTxt" type="button">텍스트</button>
+    <button class="btn" id="share" type="button">공유</button>
+    <button class="btn" id="obs" type="button">옵시디언</button>
+  </div>
+</nav>
+
+<dialog id="settings">
+  <h2>설정</h2>
+  <form method="dialog">
+    <label for="sKey">Gemini API 키
+      <input id="sKey" type="password" autocomplete="off" placeholder="AIza…">
+      <small>aistudio.google.com/apikey 에서 발급합니다. 키는 이 휴대폰에만 저장됩니다.</small>
+    </label>
+    <label for="sModel">모델
+      <input id="sModel" type="text" autocomplete="off" placeholder="gemini-flash-latest">
+      <small>틀린 이름이면 사용 가능한 flash 모델로 자동으로 바꿉니다.</small>
+    </label>
+    <label class="check" for="sAuto"><input id="sAuto" type="checkbox"> 앱으로 돌아올 때 클립보드의 YouTube 주소를 자동으로 요약</label>
+    <label for="sVault">옵시디언 보관함 이름
+      <input id="sVault" type="text" autocomplete="off" placeholder="비우면 마지막으로 연 보관함">
+    </label>
+    <label for="sFolder">옵시디언 폴더
+      <input id="sFolder" type="text" autocomplete="off" placeholder="YouTube 요약">
+    </label>
+    <div class="row">
+      <button class="btn" id="sClose" type="button">닫기</button>
+      <button class="btn primary" id="sSave" type="submit">저장</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" role="status" hidden></div>
+
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
