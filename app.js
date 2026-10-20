@@ -54,6 +54,7 @@
     el.stop.hidden = !jobs.has(viewId);
     updatePlayerUI();
   }
+  const short = (t) => (t && t.length > 26 ? t.slice(0, 26) + "…" : t || "");
   function jobsNote() {
     const others = [...jobs.keys()].filter((k) => k !== viewId).length;
     return others ? ` · 다른 요약 ${others}개 진행 중` : "";
@@ -84,7 +85,7 @@
     current = e;
     render(e.md, true);
     el.url.value = `https://youtu.be/${e.id}`;
-    if (!quiet) setStatus(`저장된 요약 · ${e.title}${jobsNote()}`, "ok");
+    if (!quiet) setStatus(`저장된 요약 · ${short(e.title)}${jobsNote()}`, "ok");
     refreshBar();
   }
 
@@ -132,7 +133,7 @@
       showEntry(entry, true);
       setStatus("완료 · 아래 버튼으로 복사하거나 들으세요." + jobsNote(), "ok");
     } else {
-      toast(`요약 완료 · ${entry.title}`);
+      toast(`요약 완료 · ${short(entry.title)}`);
       refreshBar();
     }
   }
@@ -153,7 +154,7 @@
         if (viewId === m.id) {
           if (current && current.id === m.id) current = null;
           render(m.md, false);
-          setStatus(`요약 중${m.title ? " · " + m.title : ""}${jobsNote()}`, "live");
+          setStatus(`요약 중${m.title ? " · " + short(m.title) : ""}${jobsNote()}`, "live");
           refreshBar();
         }
       } else if (m.type === "done") onDone(m.id, m.entry);
@@ -168,7 +169,7 @@
           const r = m.running[m.running.length - 1];
           viewId = r.id;
           if (r.md) render(r.md, false); else showWaiting("영상을 분석하고 있습니다.");
-          setStatus("요약 중" + (r.title ? " · " + r.title : "") + jobsNote(), "live");
+          setStatus("요약 중" + (r.title ? " · " + short(r.title) : "") + jobsNote(), "live");
         }
         refreshBar();
       }
@@ -191,7 +192,7 @@
       viewId = id; current = null;
       const j = jobs.get(id);
       if (j.md) render(j.md, false); else showWaiting("요약 중입니다.");
-      setStatus("요약 중" + (j.title ? " · " + j.title : "") + jobsNote(), "live");
+      setStatus("요약 중" + (j.title ? " · " + short(j.title) : "") + jobsNote(), "live");
       refreshBar();
       return;
     }
@@ -218,7 +219,7 @@
           jobs.set(id, { md: C.buildMarkdown(meta, url, acc), title: meta.title || "" });
           if (viewId !== id) return;
           render(jobs.get(id).md, false);
-          if (meta.title) setStatus(`요약 중 · ${meta.title}`, "live");
+          if (meta.title) setStatus(`요약 중 · ${short(meta.title)}`, "live");
         },
         onModel: (m) => { settings.model = m; saveSettings(); },
         onFastRejected: () => { settings.fast = false; saveSettings(); },

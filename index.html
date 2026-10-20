@@ -59,7 +59,12 @@ body {
   padding-left: max(16px, env(safe-area-inset-left, 0px));
   padding-right: max(16px, env(safe-area-inset-right, 0px));
   display: grid; gap: 14px;
+  grid-template-columns: minmax(0, 1fr); /* 긴 제목이 칸을 넓히지 못하게 */
 }
+.wrap > * { min-width: 0; }
+#hist li { min-width: 0; }
+#hist button { overflow: hidden; }
+.note h1 { overflow-wrap: anywhere; }
 header.top {
   position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
   background: var(--bg);
