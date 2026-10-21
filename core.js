@@ -209,13 +209,13 @@
   const isDailyQuota = (e) => isQuota(e) && ((e.quotaIds || []).some((q) => /PerDay/i.test(q)) || (!e.retryDelay && !(e.quotaIds || []).some((q) => /PerMinute/i.test(q))));
 
   // fast=true: 프레임을 5초에 1장만 보고(fps 0.2), 추론을 줄인다(thinking low)
+  // fast: false/0 = 기본, 1 = 프레임만 줄임(5초에 1장), true/2 = 프레임 + 추론 줄임
   function summaryBody(url, fast) {
+    const level = fast === true ? 2 : +fast || 0;
     const video = { file_data: { file_uri: url } };
     const body = { contents: [{ role: "user", parts: [video, { text: PROMPT }] }] };
-    if (fast) {
-      video.video_metadata = { fps: 0.2 };
-      body.generationConfig = { thinkingConfig: { thinkingLevel: "low" } };
-    }
+    if (level >= 1) video.video_metadata = { fps: 0.2 };
+    if (level >= 2) body.generationConfig = { thinkingConfig: { thinkingLevel: "low" } };
     return body;
   }
 
@@ -291,6 +291,12 @@
         return await streamSummary({ apiKey, model: mm, url, fast: true, signal, onText });
       } catch (e) {
         if (e.status === 400 && !isKeyError(e)) {
+          // 추론 설정만 거부하는 모델(lite 등)이 있다 → 프레임 줄이기는 유지하고 한 번 더
+          try {
+            return await streamSummary({ apiKey, model: mm, url, fast: 1, signal, onText });
+          } catch (e2) {
+            if (!(e2.status === 400 && !isKeyError(e2))) throw e2;
+          }
           // 기본 옵션으로 성공할 때만 "빠른 모드를 지원하지 않음"으로 본다 (비공개 영상 등도 400이 올 수 있음)
           const out = await streamSummary({ apiKey, model: mm, url, fast: false, signal, onText });
           onFastRejected && onFastRejected();

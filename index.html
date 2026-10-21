@@ -261,7 +261,12 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
       <small>aistudio.google.com/apikey 에서 발급합니다. 키는 이 휴대폰에만 저장됩니다.</small>
     </label>
     <label for="sModel">모델
-      <input id="sModel" type="text" autocomplete="off" placeholder="gemini-flash-latest">
+      <input id="sModel" type="text" autocomplete="off" placeholder="gemini-flash-latest" list="modelList">
+      <datalist id="modelList">
+        <option value="gemini-3.1-flash-lite">Flash-Lite · 저렴, 한도 여유</option>
+        <option value="gemini-flash-latest">최신 Flash · 품질 우선</option>
+        <option value="gemini-3.8-flash">3.8 Flash</option>
+      </datalist>
       <small>틀린 이름이면 사용 가능한 flash 모델로 자동으로 바꿉니다.</small>
     </label>
     <label class="check" for="sFast"><input id="sFast" type="checkbox"> 빠른 요약 (영상 프레임을 5초에 1장만 보고, 추론을 줄입니다. 말 위주 영상은 품질 차이가 작습니다)</label>
