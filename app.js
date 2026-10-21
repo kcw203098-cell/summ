@@ -160,6 +160,7 @@
       } else if (m.type === "done") onDone(m.id, m.entry);
       else if (m.type === "error") onError(m.id, m.message, m.aborted);
       else if (m.type === "model") { settings.model = m.model; saveSettings(); }
+      else if (m.type === "retry") { if (viewId === m.id) showRetry(m); }
       else if (m.type === "fastOff") { settings.fast = false; saveSettings(); toast("이 모델이 빠른 모드를 받지 않아 빠른 모드를 껐습니다"); }
       else if (m.type === "open") {
         importInbox().then(() => { const h = history.find((x) => x.id === m.id); if (h) showEntry(h); });
@@ -174,6 +175,14 @@
         refreshBar();
       }
     });
+  }
+
+  function showRetry(info) {
+    const text = info.reason === "switch"
+      ? `서버가 바빠서 다른 모델(${info.model})로 요약합니다…`
+      : `Google 서버가 바쁩니다. ${Math.round(info.wait / 1000)}초 뒤 다시 시도합니다 (${info.attempt}/2)…`;
+    showWaiting(text);
+    setStatus("재시도 중" + jobsNote(), "live");
   }
 
   // ───────────── 요약 실행 ─────────────
@@ -223,6 +232,7 @@
         },
         onModel: (m) => { settings.model = m; saveSettings(); },
         onFastRejected: () => { settings.fast = false; saveSettings(); },
+        onRetry: (info) => { if (viewId === id) showRetry(info); },
       }));
       onDone(id, { id, title: res.meta.title || id, md: res.md, ts: Date.now() });
     } catch (e) {

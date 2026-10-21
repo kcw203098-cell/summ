@@ -242,8 +242,33 @@
   const isKeyError = (e) => /api key|permission|blocked/i.test(String(e && e.message));
   const isMissingModel = (e) => e && (e.status === 404 || /not found|not supported for/i.test(String(e.message)));
 
-  // 요약 한 건 실행. 빠른 옵션이 거부되면 기본 옵션으로, 모델이 없으면 다른 flash 모델로 다시 한다.
-  async function runSummary({ id, apiKey, model, fast, signal, onProgress, onModel, onFastRejected }) {
+  // 서버 과부하(503 등): 잠시 뒤 다시 하거나 다른 모델로 넘어가면 풀리는 오류
+  const isOverloaded = (e) => e && e.name !== "AbortError" &&
+    (e.status === 503 || e.status === 500 || e.status === 504 ||
+     /high demand|overloaded|try again later|temporarily|unavailable/i.test(String(e.message)) && !/private|video/i.test(String(e.message)));
+
+  const sleep = (ms, signal) => new Promise((res, rej) => {
+    const t = setTimeout(res, ms);
+    if (signal) signal.addEventListener("abort", () => { clearTimeout(t); const e = new Error("aborted"); e.name = "AbortError"; rej(e); }, { once: true });
+  });
+
+  // 과부하일 때 넘어갈 다른 flash 모델들 (지금 모델 제외, 일반 → lite 순)
+  function altFlashModels(models, exclude) {
+    const bad = ["image", "tts", "live", "audio", "embedding", "thinking-exp"];
+    const names = (models || [])
+      .filter((m) => !m.supportedGenerationMethods || m.supportedGenerationMethods.includes("generateContent"))
+      .map((m) => String(m.name || "").replace(/^models\//, ""))
+      .filter((n) => n.includes("flash") && !bad.some((b) => n.includes(b)) && !exclude.includes(n))
+      .sort().reverse();
+    const rank = (n) => (n.includes("lite") ? 2 : 0) + (/preview|exp/.test(n) ? 1 : 0);
+    return names.sort((a, b) => rank(a) - rank(b)).slice(0, 3);
+  }
+
+  // 요약 한 건 실행.
+  // - 빠른 옵션이 거부되면 기본 옵션으로 다시 한다
+  // - 모델이 없으면 다른 flash 모델로 바꾸고 설정에 저장한다
+  // - 서버 과부하면 같은 모델로 2번 더 기다렸다 하고, 그래도 안 되면 다른 모델로 넘어간다 (설정은 그대로)
+  async function runSummary({ id, apiKey, model, fast, signal, onProgress, onModel, onFastRejected, onRetry }) {
     const url = `https://www.youtube.com/watch?v=${id}`;
     const meta = await fetchMeta(url);
     const onText = (acc) => onProgress && onProgress({ meta, url, acc });
@@ -263,17 +288,41 @@
         throw e;
       }
     };
-    let body;
-    try {
-      body = await tryFastThenPlain(m);
-    } catch (e) {
-      if (!isMissingModel(e)) throw e;
-      const alt = pickFlash(await listModels(apiKey));
-      if (!alt || alt === m) throw e;
-      m = alt;
-      onModel && onModel(alt);
-      body = await tryFastThenPlain(m);
+    const withModelFix = async () => {
+      try {
+        return await tryFastThenPlain(m);
+      } catch (e) {
+        if (!isMissingModel(e)) throw e;
+        const alt = pickFlash(await listModels(apiKey));
+        if (!alt || alt === m) throw e;
+        m = alt;
+        onModel && onModel(alt);
+        return tryFastThenPlain(m);
+      }
+    };
+
+    let body, lastErr;
+    const waits = [3000, 8000];            // 같은 모델로 재시도 전 대기 시간
+    for (let attempt = 0; attempt <= waits.length; attempt++) {
+      try { body = await withModelFix(); lastErr = null; break; }
+      catch (e) {
+        lastErr = e;
+        if (!isOverloaded(e) || attempt === waits.length) break;
+        onText("");
+        onRetry && onRetry({ reason: "overloaded", wait: waits[attempt], model: m, attempt: attempt + 1 });
+        await sleep(waits[attempt], signal);
+      }
     }
+    if (lastErr && isOverloaded(lastErr)) {
+      const tried = [m];
+      for (const alt of altFlashModels(await listModels(apiKey), tried)) {
+        onText("");
+        onRetry && onRetry({ reason: "switch", model: alt });
+        try { m = alt; body = await tryFastThenPlain(alt); lastErr = null; break; }
+        catch (e) { lastErr = e; tried.push(alt); if (!isOverloaded(e) && !isMissingModel(e)) break; }
+      }
+    }
+    if (lastErr) throw lastErr;
     if (!String(body).trim()) throw new Error("빈 응답을 받았습니다. 다시 시도하세요.");
     return { meta, url, body, model: m, md: buildMarkdown(meta, url, body) };
   }
@@ -286,6 +335,8 @@
       return "API 키가 거부됐습니다. 키가 맞는지, 키 제한에 Generative Language API가 들어 있는지 확인하세요. (" + s.slice(0, 120) + ")";
     if ((e && e.status === 429) || low.includes("quota") || low.includes("exhausted"))
       return "사용량 한도에 걸렸습니다. 잠시 뒤 다시 하세요. (" + s.slice(0, 120) + ")";
+    if (isOverloaded(e))
+      return "Google 서버에 요청이 몰려 있습니다. 자동으로 다시 시도하고 다른 모델로도 넘어갔지만 모두 바빴습니다. 1~2분 뒤 ‘요약’을 다시 누르세요.";
     if (low.includes("failed to fetch") || low.includes("network") || low.includes("load failed"))
       return "네트워크에 연결할 수 없습니다. 인터넷 연결을 확인하세요.";
     if (low.includes("private") || low.includes("unavailable"))
@@ -460,7 +511,7 @@
 
   const api = {
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
-    fetchMeta, runSummary, friendly, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
+    fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Core = api;
