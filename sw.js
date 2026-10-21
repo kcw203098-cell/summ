@@ -2,7 +2,7 @@
 importScripts("core.js");
 const Core = self.Core;
 
-const CACHE = "ytnote-v9";
+const CACHE = "ytnote-v10";
 const SHELL = ["./", "index.html", "core.js", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -67,8 +67,10 @@ async function runJob(job) {
       onModel: (model) => broadcast({ type: "model", model }),
       onFastRejected: () => broadcast({ type: "fastOff" }),
       onRetry: (info) => broadcast(Object.assign({ type: "retry", id: job.id }, info)),
+      skip: job.skip,
+      onExhausted: (model) => broadcast({ type: "exhausted", model }),
     });
-    const entry = { id: job.id, title: res.meta.title || job.id, md: res.md, ts: Date.now() };
+    const entry = { id: job.id, title: res.meta.title || job.id, md: res.md, ts: Date.now(), model: res.model };
     await Core.idb.put("inbox", entry); // 화면이 꺼져 있어도 다음에 열 때 가져간다
     const cs = await broadcast({ type: "done", id: job.id, entry });
     if (!anyVisible(cs)) await notify(job, "요약 완료", entry.title, job.id);

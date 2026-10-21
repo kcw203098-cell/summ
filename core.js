@@ -270,21 +270,32 @@
       .map((m) => String(m.name || "").replace(/^models\//, ""))
       .filter((n) => n.includes("flash") && !bad.some((b) => n.includes(b)) && !exclude.includes(n))
       .sort().reverse();
-    const rank = (n) => (n.includes("lite") ? 2 : 0) + (/preview|exp/.test(n) ? 1 : 0);
-    return names.sort((a, b) => rank(a) - rank(b)).slice(0, 3);
+    const stableFirst = (a, b) => (/preview|exp/.test(a) ? 1 : 0) - (/preview|exp/.test(b) ? 1 : 0);
+    const normal = names.filter((n) => !n.includes("lite")).sort(stableFirst).slice(0, 2);
+    const lite = names.filter((n) => n.includes("lite")).sort(stableFirst).slice(0, 2);
+    return normal.concat(lite);
   }
 
   // 요약 한 건 실행.
   // - 빠른 옵션이 거부되면 기본 옵션으로 다시 한다
   // - 모델이 없으면 다른 flash 모델로 바꾸고 설정에 저장한다
   // - 서버 과부하면 같은 모델로 2번 더 기다렸다 하고, 그래도 안 되면 다른 모델로 넘어간다 (설정은 그대로)
-  async function runSummary({ id, apiKey, model, fast: fastIn, signal, onProgress, onModel, onFastRejected, onRetry }) {
+  async function runSummary({ id, apiKey, model, fast: fastIn, signal, onProgress, onModel, onFastRejected, onRetry, skip, onExhausted }) {
+    skip = (skip || []).slice();
+    const markExhausted = (mm, e) => { if (isDailyQuota(e) && !skip.includes(mm)) { skip.push(mm); onExhausted && onExhausted(mm); } };
     const url = `https://www.youtube.com/watch?v=${id}`;
     const meta = await fetchMeta(url);
     const onText = (acc) => onProgress && onProgress({ meta, url, acc });
     onText("");
     let m = model || "gemini-flash-latest";
     let fast = !!fastIn;
+    let modelList = null;
+    const getModels = async () => modelList || (modelList = await listModels(apiKey));
+    // 오늘 한도가 찬 모델이면 처음부터 다른 모델로 시작한다 (요청을 헛되이 쓰지 않게)
+    if (skip.includes(m)) {
+      const alt = altFlashModels(await getModels(), skip)[0];
+      if (alt) { m = alt; onRetry && onRetry({ reason: "skip", model: alt }); }
+    }
     const tryFastThenPlain = async (mm) => {
       if (!fast) return streamSummary({ apiKey, model: mm, url, fast: false, signal, onText });
       try {
@@ -324,6 +335,7 @@
       try { body = await withModelFix(); lastErr = null; break; }
       catch (e) {
         lastErr = e;
+        markExhausted(m, e);
         if (attempt === waits.length) break;
         if (isTokenMinute(e)) {
           // 영상이 길어 요청 하나가 분당 토큰 한도를 넘음: 빠른 요약(프레임 5초에 1장)으로 한 번만 줄여 본다
@@ -348,12 +360,12 @@
     }
     // 한도는 모델마다 따로 센다 → 다른 모델은 한도가 남아 있을 수 있다
     if (lastErr && !isTokenMinute(lastErr) && (isOverloaded(lastErr) || isQuota(lastErr))) {
-      const tried = [m];
-      for (const alt of altFlashModels(await listModels(apiKey), tried)) {
+      const tried = skip.concat([m]);
+      for (const alt of altFlashModels(await getModels(), tried)) {
         onText("");
         onRetry && onRetry({ reason: "switch", model: alt });
         try { m = alt; body = await tryFastThenPlain(alt); lastErr = null; break; }
-        catch (e) { lastErr = e; tried.push(alt); if (!isOverloaded(e) && !isMissingModel(e) && !isQuota(e)) break; }
+        catch (e) { lastErr = e; tried.push(alt); markExhausted(alt, e); if (!isOverloaded(e) && !isMissingModel(e) && !isQuota(e)) break; }
       }
     }
     if (lastErr) throw lastErr;
@@ -362,6 +374,12 @@
   }
 
   // 하루 한도는 미국 태평양 시간 자정에 다시 채워진다 → 사용자의 현지 시각으로 바꿔 보여 준다
+  function resetAt() {
+    const now = new Date();
+    const la = new Date(now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+    const next = new Date(la); next.setHours(24, 0, 0, 0);
+    return now.getTime() + (next - la);
+  }
   function resetTime() {
     try {
       const now = new Date();
@@ -561,7 +579,7 @@
 
   const api = {
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
-    fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, isTokenMinute, resetTime, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
+    fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, isTokenMinute, resetTime, resetAt, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Core = api;

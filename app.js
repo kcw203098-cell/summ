@@ -16,6 +16,18 @@
   let settings = Object.assign({}, DEFAULTS, store.get(SKEY, {}));
   const saveSettings = () => store.set(SKEY, settings);
   let history = store.get(HKEY, []);
+  const XKEY = "ytnote.exhausted";
+  function exhaustedNow() {
+    const all = store.get(XKEY, {}), now = Date.now(), out = [];
+    for (const k in all) if (all[k] > now) out.push(k);
+    return out;
+  }
+  function markExhausted(model) {
+    const all = store.get(XKEY, {}), now = Date.now();
+    for (const k in all) if (all[k] <= now) delete all[k];
+    try { all[model] = C.resetAt(); } catch { all[model] = now + 6 * 3600e3; }
+    store.set(XKEY, all);
+  }
 
   let viewId = null;           // 지금 화면에 보이는 영상
   let current = null;          // 화면에 보이는 "완료된" 요약 {id,title,md}
@@ -131,7 +143,7 @@
     C.idb.del("inbox", id).catch(() => {});
     if (viewId === id) {
       showEntry(entry, true);
-      setStatus("완료 · 아래 버튼으로 복사하거나 들으세요." + jobsNote(), "ok");
+      setStatus("완료" + (entry.model ? " · " + entry.model : "") + " · 아래 버튼으로 복사하거나 들으세요." + jobsNote(), "ok");
     } else {
       toast(`요약 완료 · ${short(entry.title)}`);
       refreshBar();
@@ -161,6 +173,7 @@
       else if (m.type === "error") onError(m.id, m.message, m.aborted);
       else if (m.type === "model") { settings.model = m.model; saveSettings(); }
       else if (m.type === "retry") { if (viewId === m.id) showRetry(m); }
+      else if (m.type === "exhausted") markExhausted(m.model);
       else if (m.type === "fastOff") { settings.fast = false; saveSettings(); toast("이 모델이 빠른 모드를 받지 않아 빠른 모드를 껐습니다"); }
       else if (m.type === "open") {
         importInbox().then(() => { const h = history.find((x) => x.id === m.id); if (h) showEntry(h); });
@@ -178,7 +191,9 @@
   }
 
   function showRetry(info) {
-    const text = info.reason === "switch"
+    const text = info.reason === "skip"
+      ? `설정한 모델은 오늘 한도가 찼습니다. ${info.model}(으)로 요약합니다…`
+      : info.reason === "switch"
       ? `이 모델을 지금 쓸 수 없어 다른 모델(${info.model})로 요약합니다…`
       : info.reason === "shrink"
       ? "영상이 길어 분당 토큰 한도를 넘었습니다. 빠른 요약(프레임 5초에 1장)으로 줄여서 다시 합니다…"
@@ -216,7 +231,7 @@
     el.url.value = `https://www.youtube.com/watch?v=${id}`;
     showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
     setStatus("영상 분석 중…" + jobsNote(), "live");
-    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, notify: !!settings.notify };
+    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, notify: !!settings.notify, skip: exhaustedNow() };
     jobs.set(id, { md: "", title: "" });
     refreshBar();
 
@@ -237,8 +252,9 @@
         onModel: (m) => { settings.model = m; saveSettings(); },
         onFastRejected: () => { settings.fast = false; saveSettings(); },
         onRetry: (info) => { if (viewId === id) showRetry(info); },
+        onExhausted: markExhausted,
       }));
-      onDone(id, { id, title: res.meta.title || id, md: res.md, ts: Date.now() });
+      onDone(id, { id, title: res.meta.title || id, md: res.md, ts: Date.now(), model: res.model });
     } catch (e) {
       onError(id, C.friendly(e), e.name === "AbortError");
     } finally {
