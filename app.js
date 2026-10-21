@@ -98,7 +98,7 @@
     current = e;
     render(e.md, true);
     el.url.value = `https://youtu.be/${e.id}`;
-    if (!quiet) setStatus(`저장된 요약 · ${short(e.title)}${jobsNote()}`, "ok");
+    if (!quiet) setStatus(`저장된 요약${e.model ? " · " + e.model : ""} · ${short(e.title)}${jobsNote()}`, "ok");
     refreshBar();
   }
 
@@ -623,7 +623,7 @@
       if (swCtrl()) swCtrl().postMessage({ type: "status" });
       if (viewId && !current && !jobs.has(viewId)) {
         const h = history.find((x) => x.id === viewId);
-        if (h) { showEntry(h, true); setStatus("완료 · 앱 밖에 있는 동안 요약이 끝났습니다.", "ok"); }
+        if (h) { showEntry(h, true); setStatus("완료" + (h.model ? " · " + h.model : "") + " · 앱 밖에 있는 동안 요약이 끝났습니다.", "ok"); }
       }
       await autoClip();
     } finally { returning = false; }

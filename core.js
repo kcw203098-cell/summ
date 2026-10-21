@@ -62,12 +62,13 @@
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
-  function buildMarkdown(meta, url, body, now) {
+  function buildMarkdown(meta, url, body, now, model) {
     const title = (meta && meta.title) || "YouTube 영상 요약";
     const head = [`# ${title}`, ""];
     if (meta && meta.author) head.push(`- 채널: ${meta.author}`);
     head.push(`- 링크: ${url}`);
     head.push(`- 요약일: ${stamp(now || new Date())}`);
+    if (model) head.push(`- 모델: ${model}`);
     return normalize(head.join("\n") + "\n\n" + body);
   }
 
@@ -398,7 +399,7 @@
     }
     if (lastErr) { lastErr.report = report; throw lastErr; }
     if (!String(body).trim()) throw new Error("빈 응답을 받았습니다. 다시 시도하세요.");
-    return { meta, url, body, model: m, md: buildMarkdown(meta, url, body) };
+    return { meta, url, body, model: m, md: buildMarkdown(meta, url, body, null, m) };
   }
 
   // 하루 한도는 미국 태평양 시간 자정에 다시 채워진다 → 사용자의 현지 시각으로 바꿔 보여 준다
@@ -616,7 +617,7 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-22.3";
+  const VERSION = "2026-10-22.4";
   const api = {
     VERSION,
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
