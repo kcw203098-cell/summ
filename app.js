@@ -180,6 +180,8 @@
   function showRetry(info) {
     const text = info.reason === "switch"
       ? `이 모델을 지금 쓸 수 없어 다른 모델(${info.model})로 요약합니다…`
+      : info.reason === "shrink"
+      ? "영상이 길어 분당 토큰 한도를 넘었습니다. 빠른 요약(프레임 5초에 1장)으로 줄여서 다시 합니다…"
       : info.reason === "rate"
       ? `분당 요청 한도에 걸렸습니다. ${Math.round(info.wait / 1000)}초 기다렸다 다시 합니다…`
       : `Google 서버가 바쁩니다. ${Math.round(info.wait / 1000)}초 뒤 다시 시도합니다 (${info.attempt}/2)…`;

@@ -203,6 +203,7 @@
     }
     return err;
   }
+  const isTokenMinute = (e) => (e && e.quotaIds || []).some((q) => /token/i.test(q) && /minute/i.test(q));
   const isQuota = (e) => e && (e.status === 429 || /quota|exhausted/i.test(String(e.message)));
   // 하루 한도인지 (분당 한도는 잠깐 기다리면 풀린다)
   const isDailyQuota = (e) => isQuota(e) && ((e.quotaIds || []).some((q) => /PerDay/i.test(q)) || (!e.retryDelay && !(e.quotaIds || []).some((q) => /PerMinute/i.test(q))));
@@ -277,12 +278,13 @@
   // - 빠른 옵션이 거부되면 기본 옵션으로 다시 한다
   // - 모델이 없으면 다른 flash 모델로 바꾸고 설정에 저장한다
   // - 서버 과부하면 같은 모델로 2번 더 기다렸다 하고, 그래도 안 되면 다른 모델로 넘어간다 (설정은 그대로)
-  async function runSummary({ id, apiKey, model, fast, signal, onProgress, onModel, onFastRejected, onRetry }) {
+  async function runSummary({ id, apiKey, model, fast: fastIn, signal, onProgress, onModel, onFastRejected, onRetry }) {
     const url = `https://www.youtube.com/watch?v=${id}`;
     const meta = await fetchMeta(url);
     const onText = (acc) => onProgress && onProgress({ meta, url, acc });
     onText("");
     let m = model || "gemini-flash-latest";
+    let fast = !!fastIn;
     const tryFastThenPlain = async (mm) => {
       if (!fast) return streamSummary({ apiKey, model: mm, url, fast: false, signal, onText });
       try {
@@ -317,6 +319,14 @@
       catch (e) {
         lastErr = e;
         if (attempt === waits.length) break;
+        if (isTokenMinute(e)) {
+          // 영상이 길어 요청 하나가 분당 토큰 한도를 넘음: 빠른 요약(프레임 5초에 1장)으로 한 번만 줄여 본다
+          if (fast) break;
+          fast = true;
+          onText("");
+          onRetry && onRetry({ reason: "shrink", wait: 0, model: m, attempt: 1 });
+          continue;
+        }
         if (isQuota(e) && !isDailyQuota(e) && (e.retryDelay || 0) <= 45 && attempt === 0) {
           const w = Math.ceil((e.retryDelay || 20) + 1) * 1000;   // 분당 한도: 안내된 시간만큼 한 번만 기다린다
           onText("");
@@ -331,7 +341,7 @@
       }
     }
     // 한도는 모델마다 따로 센다 → 다른 모델은 한도가 남아 있을 수 있다
-    if (lastErr && (isOverloaded(lastErr) || isQuota(lastErr))) {
+    if (lastErr && !isTokenMinute(lastErr) && (isOverloaded(lastErr) || isQuota(lastErr))) {
       const tried = [m];
       for (const alt of altFlashModels(await listModels(apiKey), tried)) {
         onText("");
@@ -363,6 +373,8 @@
     if (isKeyError(e) && (e.status === 400 || e.status === 401 || e.status === 403))
       return "API 키가 거부됐습니다. 키가 맞는지, 키 제한에 Generative Language API가 들어 있는지 확인하세요. (" + s.slice(0, 120) + ")";
     if (isQuota(e)) {
+      if (isTokenMinute(e))
+        return "영상이 길어서 요청 하나가 무료 등급의 분당 입력 토큰 한도를 넘었습니다. 사용량과 상관없이 생기는 오류입니다. 빠른 요약으로 줄여서도 시도했지만 넘었습니다. 더 짧은 영상을 쓰거나, 유료 등급으로 올리면 됩니다. (" + (e.quotaIds || []).join(", ") + ")";
       if (isDailyQuota(e))
         return `오늘 무료 사용량을 다 썼습니다. 다른 모델도 모두 한도에 걸렸습니다. 한도는 ${resetTime()}에 다시 채워집니다. (한도: ${(e.quotaIds || []).join(", ") || "하루 요청 수"})`;
       return "분당 요청 한도에 걸렸습니다. 1분쯤 뒤 다시 하세요. (" + ((e.quotaIds || []).join(", ") || s.slice(0, 80)) + ")";
@@ -543,7 +555,7 @@
 
   const api = {
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
-    fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, resetTime, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
+    fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, isTokenMinute, resetTime, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Core = api;
