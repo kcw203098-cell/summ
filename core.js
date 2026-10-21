@@ -193,10 +193,19 @@
   }
 
   async function apiError(r) {
-    let msg = `HTTP ${r.status}`;
-    try { const j = await r.json(); msg = (j.error && j.error.message) || msg; } catch (e) {}
-    const err = new Error(msg); err.status = r.status; return err;
+    let msg = `HTTP ${r.status}`, details = [];
+    try { const j = await r.json(); msg = (j.error && j.error.message) || msg; details = (j.error && j.error.details) || []; } catch (e) {}
+    const err = new Error(msg); err.status = r.status;
+    for (const d of details) {
+      const t = String(d["@type"] || "");
+      if (t.endsWith("RetryInfo") && d.retryDelay) err.retryDelay = parseFloat(d.retryDelay); // 초
+      if (t.endsWith("QuotaFailure")) err.quotaIds = (d.violations || []).map((v) => v.quotaId || v.quotaMetric || "").filter(Boolean);
+    }
+    return err;
   }
+  const isQuota = (e) => e && (e.status === 429 || /quota|exhausted/i.test(String(e.message)));
+  // 하루 한도인지 (분당 한도는 잠깐 기다리면 풀린다)
+  const isDailyQuota = (e) => isQuota(e) && ((e.quotaIds || []).some((q) => /PerDay/i.test(q)) || (!e.retryDelay && !(e.quotaIds || []).some((q) => /PerMinute/i.test(q))));
 
   // fast=true: 프레임을 5초에 1장만 보고(fps 0.2), 추론을 줄인다(thinking low)
   function summaryBody(url, fast) {
@@ -307,24 +316,44 @@
       try { body = await withModelFix(); lastErr = null; break; }
       catch (e) {
         lastErr = e;
-        if (!isOverloaded(e) || attempt === waits.length) break;
+        if (attempt === waits.length) break;
+        if (isQuota(e) && !isDailyQuota(e) && (e.retryDelay || 0) <= 45 && attempt === 0) {
+          const w = Math.ceil((e.retryDelay || 20) + 1) * 1000;   // 분당 한도: 안내된 시간만큼 한 번만 기다린다
+          onText("");
+          onRetry && onRetry({ reason: "rate", wait: w, model: m, attempt: 1 });
+          await sleep(w, signal);
+          continue;
+        }
+        if (!isOverloaded(e)) break;
         onText("");
         onRetry && onRetry({ reason: "overloaded", wait: waits[attempt], model: m, attempt: attempt + 1 });
         await sleep(waits[attempt], signal);
       }
     }
-    if (lastErr && isOverloaded(lastErr)) {
+    // 한도는 모델마다 따로 센다 → 다른 모델은 한도가 남아 있을 수 있다
+    if (lastErr && (isOverloaded(lastErr) || isQuota(lastErr))) {
       const tried = [m];
       for (const alt of altFlashModels(await listModels(apiKey), tried)) {
         onText("");
         onRetry && onRetry({ reason: "switch", model: alt });
         try { m = alt; body = await tryFastThenPlain(alt); lastErr = null; break; }
-        catch (e) { lastErr = e; tried.push(alt); if (!isOverloaded(e) && !isMissingModel(e)) break; }
+        catch (e) { lastErr = e; tried.push(alt); if (!isOverloaded(e) && !isMissingModel(e) && !isQuota(e)) break; }
       }
     }
     if (lastErr) throw lastErr;
     if (!String(body).trim()) throw new Error("빈 응답을 받았습니다. 다시 시도하세요.");
     return { meta, url, body, model: m, md: buildMarkdown(meta, url, body) };
+  }
+
+  // 하루 한도는 미국 태평양 시간 자정에 다시 채워진다 → 사용자의 현지 시각으로 바꿔 보여 준다
+  function resetTime() {
+    try {
+      const now = new Date();
+      const la = new Date(now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+      const next = new Date(la); next.setHours(24, 0, 0, 0);
+      const t = new Date(now.getTime() + (next - la));
+      return t.toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" });
+    } catch (x) { return "미국 태평양 시간 자정"; }
   }
 
   function friendly(e) {
@@ -333,8 +362,11 @@
     if (e && e.name === "AbortError") return "요약을 멈췄습니다.";
     if (isKeyError(e) && (e.status === 400 || e.status === 401 || e.status === 403))
       return "API 키가 거부됐습니다. 키가 맞는지, 키 제한에 Generative Language API가 들어 있는지 확인하세요. (" + s.slice(0, 120) + ")";
-    if ((e && e.status === 429) || low.includes("quota") || low.includes("exhausted"))
-      return "사용량 한도에 걸렸습니다. 잠시 뒤 다시 하세요. (" + s.slice(0, 120) + ")";
+    if (isQuota(e)) {
+      if (isDailyQuota(e))
+        return `오늘 무료 사용량을 다 썼습니다. 다른 모델도 모두 한도에 걸렸습니다. 한도는 ${resetTime()}에 다시 채워집니다. (한도: ${(e.quotaIds || []).join(", ") || "하루 요청 수"})`;
+      return "분당 요청 한도에 걸렸습니다. 1분쯤 뒤 다시 하세요. (" + ((e.quotaIds || []).join(", ") || s.slice(0, 80)) + ")";
+    }
     if (isOverloaded(e))
       return "Google 서버에 요청이 몰려 있습니다. 자동으로 다시 시도하고 다른 모델로도 넘어갔지만 모두 바빴습니다. 1~2분 뒤 ‘요약’을 다시 누르세요.";
     if (low.includes("failed to fetch") || low.includes("network") || low.includes("load failed"))
@@ -511,7 +543,7 @@
 
   const api = {
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
-    fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
+    fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, resetTime, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Core = api;

@@ -179,7 +179,9 @@
 
   function showRetry(info) {
     const text = info.reason === "switch"
-      ? `서버가 바빠서 다른 모델(${info.model})로 요약합니다…`
+      ? `이 모델을 지금 쓸 수 없어 다른 모델(${info.model})로 요약합니다…`
+      : info.reason === "rate"
+      ? `분당 요청 한도에 걸렸습니다. ${Math.round(info.wait / 1000)}초 기다렸다 다시 합니다…`
       : `Google 서버가 바쁩니다. ${Math.round(info.wait / 1000)}초 뒤 다시 시도합니다 (${info.attempt}/2)…`;
     showWaiting(text);
     setStatus("재시도 중" + jobsNote(), "live");
