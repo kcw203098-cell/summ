@@ -199,14 +199,33 @@
     for (const d of details) {
       const t = String(d["@type"] || "");
       if (t.endsWith("RetryInfo") && d.retryDelay) err.retryDelay = parseFloat(d.retryDelay); // 초
-      if (t.endsWith("QuotaFailure")) err.quotaIds = (d.violations || []).map((v) => v.quotaId || v.quotaMetric || "").filter(Boolean);
+      if (t.endsWith("QuotaFailure")) {
+        const vs = d.violations || [];
+        err.quotaIds = vs.map((v) => v.quotaId || v.quotaMetric || "").filter(Boolean);
+        const val = vs.map((v) => v.quotaValue).find((x) => x != null && x !== "");
+        if (val != null) err.limit = Number(val);
+      }
     }
+    if (err.limit == null) { const lm = msg.match(/limit:\s*(\d+)/i); if (lm) err.limit = Number(lm[1]); }
     return err;
   }
   const isTokenMinute = (e) => (e && e.quotaIds || []).some((q) => /token/i.test(q) && /minute/i.test(q));
   const isQuota = (e) => e && (e.status === 429 || /quota|exhausted/i.test(String(e.message)));
   // 하루 한도인지 (분당 한도는 잠깐 기다리면 풀린다)
-  const isDailyQuota = (e) => isQuota(e) && ((e.quotaIds || []).some((q) => /PerDay/i.test(q)) || (!e.retryDelay && !(e.quotaIds || []).some((q) => /PerMinute/i.test(q))));
+  const isDailyQuota = (e) => isQuota(e) && ((e.quotaIds || []).some((q) => /PerDay/i.test(q)) || /per day|daily/i.test(String(e.message)) || e.limit === 0);
+
+  // 모델 하나가 실패한 이유를 한 줄로
+  function failReason(e) {
+    if (isQuota(e)) {
+      if (e.limit === 0) return "무료 등급에서 제공 안 함 (한도 0)";
+      if (isTokenMinute(e)) return "분당 토큰 한도 초과 (영상이 큼)";
+      if (isDailyQuota(e)) return `하루 한도${e.limit ? " " + e.limit + "회" : ""} 다 씀`;
+      return `분당 한도${e.limit ? " " + e.limit + "회" : ""} 초과`;
+    }
+    if (isOverloaded(e)) return "서버 과부하";
+    if (isMissingModel(e)) return "이 키로 쓸 수 없는 모델";
+    return String(e.message || e).slice(0, 60);
+  }
 
   // fast=true: 프레임을 5초에 1장만 보고(fps 0.2), 추론을 줄인다(thinking low)
   // fast: false/0 = 기본, 1 = 프레임만 줄임(5초에 1장), true/2 = 프레임 + 추론 줄임
@@ -282,7 +301,11 @@
   // - 서버 과부하면 같은 모델로 2번 더 기다렸다 하고, 그래도 안 되면 다른 모델로 넘어간다 (설정은 그대로)
   async function runSummary({ id, apiKey, model, fast: fastIn, signal, onProgress, onModel, onFastRejected, onRetry, skip, onExhausted }) {
     skip = (skip || []).slice();
-    const markExhausted = (mm, e) => { if (isDailyQuota(e) && !skip.includes(mm)) { skip.push(mm); onExhausted && onExhausted(mm); } };
+    const report = [];   // 모델별 실패 이유
+    const markExhausted = (mm, e) => {
+      if (e && e.name !== "AbortError") report.push({ model: mm, why: failReason(e) });
+      if (isDailyQuota(e) && !skip.includes(mm)) { skip.push(mm); onExhausted && onExhausted(mm); }
+    };
     const url = `https://www.youtube.com/watch?v=${id}`;
     const meta = await fetchMeta(url);
     const onText = (acc) => onProgress && onProgress({ meta, url, acc });
@@ -371,9 +394,9 @@
           if (!lastErr || isQuota(e) || !isQuota(lastErr)) lastErr = e;   // 한도 오류를 우선 보여 준다
         }
       }
-      if (lastErr) lastErr.triedCount = tried.length;
+      if (lastErr) lastErr.triedCount = new Set(tried).size;
     }
-    if (lastErr) throw lastErr;
+    if (lastErr) { lastErr.report = report; throw lastErr; }
     if (!String(body).trim()) throw new Error("빈 응답을 받았습니다. 다시 시도하세요.");
     return { meta, url, body, model: m, md: buildMarkdown(meta, url, body) };
   }
@@ -396,6 +419,15 @@
   }
 
   function friendly(e) {
+    const base = friendlyBase(e);
+    const rep = (e && e.report) || [];
+    if (!rep.length) return base;
+    const seen = new Set();
+    const lines = rep.filter((r) => !seen.has(r.model) && seen.add(r.model)).map((r) => `· ${r.model}: ${r.why}`);
+    return base + "\n\n모델별 결과\n" + lines.join("\n");
+  }
+
+  function friendlyBase(e) {
     const s = String((e && e.message) || e);
     const low = s.toLowerCase();
     if (e && e.name === "AbortError") return "요약을 멈췄습니다.";
@@ -405,7 +437,9 @@
       if (isTokenMinute(e))
         return "영상이 길어서 요청 하나가 무료 등급의 분당 입력 토큰 한도를 넘었습니다. 사용량과 상관없이 생기는 오류입니다. 빠른 요약으로 줄여서도 시도했지만 넘었습니다. 더 짧은 영상을 쓰거나, 유료 등급으로 올리면 됩니다. (" + (e.quotaIds || []).join(", ") + ")";
       if (isDailyQuota(e))
-        return `오늘 무료 사용량을 다 썼습니다. 쓸 수 있는 모델${e.triedCount ? " " + e.triedCount + "개를" : "을"} 모두 시도했지만 한도에 걸렸습니다. 한도는 ${resetTime()}에 다시 채워집니다. (한도: ${(e.quotaIds || []).join(", ") || "하루 요청 수"})`;
+        return (e.report && e.report.length)
+          ? `지금 요약할 수 있는 모델이 없습니다. 모델 ${e.triedCount || e.report.length}개를 시도했습니다. 하루 한도는 ${resetTime()}에 다시 채워지고, 분당 한도는 1분 뒤에 풀립니다.`
+          : `오늘 무료 사용량을 다 썼습니다. 한도는 ${resetTime()}에 다시 채워집니다. (한도: ${(e.quotaIds || []).join(", ") || "하루 요청 수"})`;
       return "분당 요청 한도에 걸렸습니다. 1분쯤 뒤 다시 하세요. (" + ((e.quotaIds || []).join(", ") || s.slice(0, 80)) + ")";
     }
     if (isOverloaded(e))
@@ -582,11 +616,11 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-22.2";
+  const VERSION = "2026-10-22.3";
   const api = {
     VERSION,
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
-    fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, isTokenMinute, resetTime, resetAt, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
+    fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, isTokenMinute, resetTime, resetAt, failReason, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Core = api;

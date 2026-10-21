@@ -125,7 +125,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .note blockquote { margin: 0 0 14px; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
 .note .ts { font: 500 12px var(--font-mono); color: var(--muted); background: var(--accent-soft); padding: 1px 6px; border-radius: 6px; margin-left: 4px; white-space: nowrap; }
 .note .wait { color: var(--muted); }
-.note .err { color: var(--err); }
+.note .err { color: var(--err); white-space: pre-line; }
 .note.streaming > :last-child::after { content: "▍"; color: var(--live); animation: pulse 1s infinite; }
 
 .empty { border: 1px dashed var(--line); border-radius: var(--r); padding: 22px 20px; color: var(--muted); }

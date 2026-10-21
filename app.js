@@ -17,6 +17,7 @@
   const saveSettings = () => store.set(SKEY, settings);
   let history = store.get(HKEY, []);
   const XKEY = "ytnote.exhausted";
+  if (store.get("ytnote.ver", "") !== C.VERSION) { try { localStorage.removeItem(XKEY); } catch {} store.set("ytnote.ver", C.VERSION); }
   function exhaustedNow() {
     const all = store.get(XKEY, {}), now = Date.now(), out = [];
     for (const k in all) if (all[k] > now) out.push(k);
