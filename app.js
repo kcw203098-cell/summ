@@ -617,6 +617,7 @@
     if (document.visibilityState !== "visible" || returning) return;
     returning = true;
     try {
+      if (window.__swReg) window.__swReg.update().catch(() => {});
       await importInbox();
       if (swCtrl()) swCtrl().postMessage({ type: "status" });
       if (viewId && !current && !jobs.has(viewId)) {
@@ -649,6 +650,7 @@
 
   // ───────────── 설정 ─────────────
   function openSettings() {
+    const v = document.getElementById("ver"); if (v) v.textContent = "버전 " + C.VERSION;
     el.sKey.value = settings.apiKey;
     el.sModel.value = settings.model;
     el.sFast.checked = !!settings.fast;
@@ -687,7 +689,18 @@
     renderHistory();
     await importInbox();
     if (SW) {
-      SW.register("./sw.js").catch(() => {});
+      let hadController = !!SW.controller, reloaded = false;
+      SW.register("./sw.js", { updateViaCache: "none" }).then((reg) => {
+        window.__swReg = reg;
+        reg.update().catch(() => {});
+      }).catch(() => {});
+      // 새 버전이 설치되면 한 번 새로고침해서 바로 적용 (요약 중이면 끝난 뒤로 미룬다)
+      SW.addEventListener("controllerchange", () => {
+        if (!hadController) { hadController = true; return; }
+        if (reloaded) return;
+        const go = () => { if (!jobs.size && !player.playing) { reloaded = true; location.reload(); } else setTimeout(go, 3000); };
+        go();
+      });
       SW.ready.then(() => swCtrl() && swCtrl().postMessage({ type: "status" })).catch(() => {});
     }
     const handled = handleParams();

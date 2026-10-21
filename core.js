@@ -263,17 +263,17 @@
   });
 
   // 과부하일 때 넘어갈 다른 flash 모델들 (지금 모델 제외, 일반 → lite 순)
+  // 요약에 쓸 수 있는 모델 전부 (계정에서 실제로 보이는 목록 기준)
+  // 순서: Flash → Flash-Lite → Pro → 기타, 각 그룹 안에서 정식 → 미리보기, 새 버전 먼저
   function altFlashModels(models, exclude) {
-    const bad = ["image", "tts", "live", "audio", "embedding", "thinking-exp"];
-    const names = (models || [])
+    const bad = ["image", "tts", "live", "audio", "embedding", "aqa", "imagen", "veo", "gemma", "robotics", "computer-use", "native", "learnlm", "thinking-exp", "nano"];
+    const names = [...new Set((models || [])
       .filter((m) => !m.supportedGenerationMethods || m.supportedGenerationMethods.includes("generateContent"))
       .map((m) => String(m.name || "").replace(/^models\//, ""))
-      .filter((n) => n.includes("flash") && !bad.some((b) => n.includes(b)) && !exclude.includes(n))
-      .sort().reverse();
-    const stableFirst = (a, b) => (/preview|exp/.test(a) ? 1 : 0) - (/preview|exp/.test(b) ? 1 : 0);
-    const normal = names.filter((n) => !n.includes("lite")).sort(stableFirst).slice(0, 2);
-    const lite = names.filter((n) => n.includes("lite")).sort(stableFirst).slice(0, 2);
-    return normal.concat(lite);
+      .filter((n) => n.startsWith("gemini") && !bad.some((b) => n.includes(b)) && !(exclude || []).includes(n)))];
+    const group = (n) => (n.includes("flash") && !n.includes("lite") ? 0 : n.includes("lite") ? 1 : n.includes("pro") ? 2 : 3);
+    const pre = (n) => (/preview|exp/.test(n) ? 1 : 0);
+    return names.sort((a, b) => group(a) - group(b) || pre(a) - pre(b) || b.localeCompare(a, "en", { numeric: true }));
   }
 
   // 요약 한 건 실행.
@@ -365,8 +365,13 @@
         onText("");
         onRetry && onRetry({ reason: "switch", model: alt });
         try { m = alt; body = await tryFastThenPlain(alt); lastErr = null; break; }
-        catch (e) { lastErr = e; tried.push(alt); markExhausted(alt, e); if (!isOverloaded(e) && !isMissingModel(e) && !isQuota(e)) break; }
+        catch (e) {
+          tried.push(alt); markExhausted(alt, e);
+          if (e.name === "AbortError" || isKeyError(e)) { lastErr = e; break; }
+          if (!lastErr || isQuota(e) || !isQuota(lastErr)) lastErr = e;   // 한도 오류를 우선 보여 준다
+        }
       }
+      if (lastErr) lastErr.triedCount = tried.length;
     }
     if (lastErr) throw lastErr;
     if (!String(body).trim()) throw new Error("빈 응답을 받았습니다. 다시 시도하세요.");
@@ -400,7 +405,7 @@
       if (isTokenMinute(e))
         return "영상이 길어서 요청 하나가 무료 등급의 분당 입력 토큰 한도를 넘었습니다. 사용량과 상관없이 생기는 오류입니다. 빠른 요약으로 줄여서도 시도했지만 넘었습니다. 더 짧은 영상을 쓰거나, 유료 등급으로 올리면 됩니다. (" + (e.quotaIds || []).join(", ") + ")";
       if (isDailyQuota(e))
-        return `오늘 무료 사용량을 다 썼습니다. 다른 모델도 모두 한도에 걸렸습니다. 한도는 ${resetTime()}에 다시 채워집니다. (한도: ${(e.quotaIds || []).join(", ") || "하루 요청 수"})`;
+        return `오늘 무료 사용량을 다 썼습니다. 쓸 수 있는 모델${e.triedCount ? " " + e.triedCount + "개를" : "을"} 모두 시도했지만 한도에 걸렸습니다. 한도는 ${resetTime()}에 다시 채워집니다. (한도: ${(e.quotaIds || []).join(", ") || "하루 요청 수"})`;
       return "분당 요청 한도에 걸렸습니다. 1분쯤 뒤 다시 하세요. (" + ((e.quotaIds || []).join(", ") || s.slice(0, 80)) + ")";
     }
     if (isOverloaded(e))
@@ -577,7 +582,9 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
+  const VERSION = "2026-10-22.2";
   const api = {
+    VERSION,
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
     fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, isTokenMinute, resetTime, resetAt, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
   };
