@@ -126,7 +126,7 @@
       b.querySelector(".hn").textContent = nums.get(h.id) + ".";
       b.querySelector(".ht").textContent = h.title;
       b.querySelector(".hd").textContent = new Date(h.ts).toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
-      b.addEventListener("click", () => { showEntry(h); window.scrollTo({ top: 0, behavior: "smooth" }); });
+      b.addEventListener("click", () => { stopFollow(); showEntry(h); window.scrollTo({ top: 0, behavior: "smooth" }); });
       li.appendChild(b);
       el.hist.appendChild(li);
     }
@@ -146,25 +146,65 @@
   const SW = "serviceWorker" in navigator ? navigator.serviceWorker : null;
   const swCtrl = () => SW && SW.controller;
 
+  // ───────────── 어떤 요약을 보여 줄지 ─────────────
+  // 요청한 순서를 저장해 두고, 화면은 "가장 먼저 요청한 것"을 따라간다.
+  // - 아직 요약 중이면 그 요약 진행 화면, 끝났으면 그 요약 내용을 보여 준다
+  // - 앱을 나갔다 오거나 다시 열어도 같은 규칙을 쓴다
+  // - 목록에서 직접 고르면 따라가기를 멈춘다
+  const RQKEY = "ytnote.reqs";
+  const getReqs = () => store.get(RQKEY, []).filter((r) => Date.now() - r.ts < 6 * 3600 * 1000).sort((a, b) => a.ts - b.ts);
+  const setReqs = (a) => store.set(RQKEY, a);
+  const addReq = (id) => setReqs(getReqs().filter((r) => r.id !== id).concat([{ id, ts: Date.now() }]));
+  const dropReq = (id) => setReqs(getReqs().filter((r) => r.id !== id));
+  const stopFollow = () => setReqs([]);
+
+  function presentDone(entry, fromBg) {
+    showEntry(entry, true);
+    showTiming(entry.timing);
+    if (entry.partial) toast(`${entry.partial}개 구간은 요약하지 못했습니다. 문서에 표시했습니다.`);
+    setStatus("완료" + (entry.model ? " · " + entry.model : "") + (entry.ms ? " · " + C.fmtMs(entry.ms) : "") + (fromBg ? " · 앱 밖에 있는 동안 요약이 끝났습니다." : " · 아래 버튼으로 복사하거나 들으세요.") + jobsNote(), "ok");
+  }
+
+  // 반환: 화면에 보여 주거나 따라가기로 한 영상 id (없으면 null)
+  // prune=false: 서비스 워커 상태를 아직 모르는 요청은 지우지 않고 건너뛴다 (앱을 막 열었을 때)
+  function focusFirst(opts) {
+    const prune = !opts || opts.prune !== false, bg = !!(opts && opts.bg);
+    for (const r of getReqs()) {
+      const h = history.find((x) => x.id === r.id && x.ts >= r.ts - 2000);
+      if (h) { stopFollow(); presentDone(h, bg); return h.id; }
+      if (jobs.has(r.id)) {
+        if (viewId !== r.id || current) {
+          viewId = r.id; current = null;
+          el.url.value = `https://www.youtube.com/watch?v=${r.id}`;
+          const j = jobs.get(r.id);
+          if (j.md) render(j.md, false); else showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
+          setStatus("요약 중" + (j.title ? " · " + short(j.title) : "") + jobsNote(), "live");
+          refreshBar();
+        }
+        return r.id;
+      }
+      if (prune) dropReq(r.id);   // 끝난 기록도 진행 중인 작업도 없다 → 실패했거나 사라진 요청
+    }
+    return null;
+  }
+
   function onDone(id, entry) {
     jobs.delete(id);
     saveHistory(entry);
     C.idb.del("inbox", id).catch(() => {});
-    if (viewId === id) {
-      showEntry(entry, true);
-      showTiming(entry.timing);
-      if (entry.partial) toast(`${entry.partial}개 구간은 요약하지 못했습니다. 문서에 표시했습니다.`);
-      setStatus("완료" + (entry.model ? " · " + entry.model : "") + (entry.ms ? " · " + C.fmtMs(entry.ms) : "") + " · 아래 버튼으로 복사하거나 들으세요." + jobsNote(), "ok");
-    } else {
-      toast(`요약 완료 · ${short(entry.title)}`);
-      refreshBar();
-    }
+    const shown = focusFirst();
+    if (shown === id) { refreshBar(); return; }
+    if (shown) { toast(`요약 완료 · ${short(entry.title)}`); refreshBar(); return; }   // 더 먼저 요청한 요약이 아직 진행 중
+    if (viewId === id) presentDone(entry, false);
+    else { toast(`요약 완료 · ${short(entry.title)}`); refreshBar(); }
   }
   function onError(id, message, aborted) {
     jobs.delete(id);
+    dropReq(id);
     if (viewId === id) {
-      showError(message);
-      setStatus(aborted ? "멈춤" : "실패", "err");
+      const next = aborted ? null : focusFirst();   // 다른 요청이 남아 있으면 그쪽을 따라가고 실패는 알림으로만
+      if (next) toast("요약 실패 · " + message.slice(0, 40));
+      else { showError(message); setStatus(aborted ? "멈춤" : "실패", "err"); }
     } else if (!aborted) toast("요약 실패 · " + message.slice(0, 40));
     refreshBar();
   }
@@ -191,7 +231,7 @@
       else if (m.type === "pick") recordPick(m.pick);
       else if (m.type === "fastOff") { settings.fast = false; saveSettings(); toast("이 모델이 빠른 모드를 받지 않아 빠른 모드를 껐습니다"); }
       else if (m.type === "open") {
-        importInbox().then(() => { const h = history.find((x) => x.id === m.id); if (h) showEntry(h); });
+        importInbox().then(() => { const h = history.find((x) => x.id === m.id); if (h) { stopFollow(); showEntry(h); } });
       } else if (m.type === "status") {
         for (const r of m.running || []) jobs.set(r.id, { md: r.md, title: r.title });
         // 서비스 워커가 백그라운드에서 꺼져 작업이 사라졌으면 한 번 자동으로 다시 시작한다
@@ -202,8 +242,9 @@
           toast("백그라운드에서 요약이 끊겨 다시 시작합니다");
           summarize(id, true);
         }
-        if (!viewId && m.running && m.running.length) {
-          const r = m.running[m.running.length - 1];
+        const followed = focusFirst({ prune: true, bg: true });
+        if (!followed && !viewId && m.running && m.running.length) {
+          const r = m.running[0];
           viewId = r.id;
           if (r.md) render(r.md, false); else showWaiting("영상을 분석하고 있습니다.");
           setStatus("요약 중" + (r.title ? " · " + short(r.title) : "") + jobsNote(), "live");
@@ -367,6 +408,7 @@
 
     viewId = id;
     current = null;
+    addReq(id);
     el.url.value = `https://www.youtube.com/watch?v=${id}`;
     showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
     setStatus("영상 분석 중…" + jobsNote(), "live");
@@ -775,8 +817,9 @@
     try {
       if (window.__swReg) window.__swReg.update().catch(() => {});
       await importInbox();
+      const followed = focusFirst({ prune: false, bg: true });
       if (swCtrl()) swCtrl().postMessage({ type: "status" });
-      if (viewId && !current && !jobs.has(viewId)) {
+      if (!followed && viewId && !current && !jobs.has(viewId)) {
         const h = history.find((x) => x.id === viewId);
         if (h) { showEntry(h, true); setStatus("완료" + (h.model ? " · " + h.model : "") + " · 앱 밖에 있는 동안 요약이 끝났습니다.", "ok"); }
       }
@@ -867,8 +910,9 @@
       SW.ready.then(() => swCtrl() && swCtrl().postMessage({ type: "status" })).catch(() => {});
     }
     const handled = handleParams();
+    const followed = handled ? null : focusFirst({ prune: false, bg: true });
     if (!settings.apiKey) { setStatus("설정(⚙)에서 Gemini API 키를 넣어 주세요.", "warn"); if (!handled) openSettings(); }
-    else if (!handled) { setStatus("YouTube 주소를 복사하거나 공유하세요.", ""); autoClip(); }
+    else if (!handled) { if (!followed) setStatus("YouTube 주소를 복사하거나 공유하세요.", ""); autoClip(); }
     refreshBar();
   })();
 })();
