@@ -275,7 +275,7 @@
     } catch (e) { log(`연결 실패 (${sec()}초): ${e.name} ${String(e.message).slice(0, 50)}`); fail(e); throw e; }
     rec.headers = Date.now() - t;
     log(`응답 HTTP ${r.status} (${sec()}초)`);
-    if (!r.ok) { const er = await apiError(r); log(`오류: ${String(er.message).slice(0, 90)}`); fail(er); throw er; }
+    if (!r.ok) { const er = await apiError(r); log(`오류: ${String(er.message).slice(0, 90)}`); if (isQuota(er)) log(`한도 종류: ${isTokenMinute(er) ? "분당 토큰" : isDailyQuota(er) ? "하루" : (er.quotaIds || []).length ? "분당(요청)" : "알 수 없음(quotaId 없음→분당으로 처리)"} · quotaId: ${(er.quotaIds || []).join(", ") || "없음"}${er.limit != null ? " · 한도값 " + er.limit : ""}${er.retryDelay ? " · 재시도 " + er.retryDelay + "초" : ""}`); fail(er); throw er; }
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = "", acc = "";
@@ -1007,7 +1007,7 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-24.6";
+  const VERSION = "2026-10-24.7";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
     VERSION, fmtMs, timingReport, pickFastest, PING_TTL, runSplit, planSegments, segmentPrompt, fmtClock,
