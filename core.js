@@ -495,6 +495,91 @@
     return { meta, url, body, model: m, ms: Date.now() - t0, timing, md: buildMarkdown(meta, url, body, null, m) };
   }
 
+  // ───────────── 모델 속도 핑 ─────────────
+  // 아주 짧은 공개 영상(19초)으로 후보 모델 몇 개에 동시에 작은 요청을 보내고, 가장 먼저 답한 모델을 고른다.
+  // 모델마다 하루 요청 한도가 따로 있으므로 후보는 최대 3개, 결과는 20분 동안 재사용한다.
+  const PING_VIDEO = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
+  const PING_TTL = 20 * 60 * 1000;
+
+  function pingBody(think) {
+    const body = {
+      contents: [{ role: "user", parts: [{ file_data: { file_uri: PING_VIDEO }, video_metadata: { fps: 0.2 } }, { text: "이 영상을 한 문장으로 설명해 줘." }] }],
+      generationConfig: { maxOutputTokens: 64 },
+    };
+    if (think) body.generationConfig.thinkingConfig = { thinkingLevel: "low" };
+    return body;
+  }
+
+  async function pingModel(apiKey, mm, signal) {
+    const t = Date.now();
+    const send = (think) => fetch(`${API}/models/${encodeURIComponent(mm)}:generateContent`, {
+      method: "POST", signal,
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify(pingBody(think)),
+    });
+    let r = await send(true);
+    if (r.status === 400) r = await send(false);          // 추론 설정만 거부하는 모델
+    if (!r.ok) throw await apiError(r);
+    try { await r.arrayBuffer(); } catch (e) {}
+    return Date.now() - t;
+  }
+
+  // 반환: { model, ms, tried: [{model, ms|why}], cached, total } 또는 null (전부 실패·시간 초과)
+  async function pickFastest(args) {
+    const { apiKey, model, signal, onLog, onExhausted, onBusy, pickCache } = args;
+    const skip = args.skip || [], busy = args.busy || [], good = args.good || [];
+    const log = (x) => onLog && onLog(x);
+    const timeoutMs = args.pingTimeoutMs || 12000;
+    const t0 = Date.now();
+    if (pickCache && pickCache.model && Date.now() - pickCache.ts < PING_TTL && !skip.includes(pickCache.model) && !busy.includes(pickCache.model)) {
+      log(`핑 건너뜀 · ${Math.round((Date.now() - pickCache.ts) / 60000)}분 전 결과 사용 (${pickCache.model})`);
+      return { model: pickCache.model, ms: pickCache.ms, tried: [], cached: true, total: 0 };
+    }
+    const models = await listModels(apiKey);
+    const gi = (x) => { const k = good.indexOf(x); return k < 0 ? 99 : k; };
+    const rest = altFlashModels(models, skip.concat([model]))
+      .map((x, i) => ({ x, i })).sort((a, b) => (busy.includes(a.x) - busy.includes(b.x)) || (gi(a.x) - gi(b.x)) || (a.i - b.i)).map((o) => o.x);
+    let cands = [...new Set([].concat(model && !skip.includes(model) ? [model] : [], rest))];
+    const fresh = cands.filter((x) => !busy.includes(x));
+    if (fresh.length) cands = fresh;
+    cands = cands.slice(0, args.maxCands || 3);
+    if (cands.length < 2) { log("핑 건너뜀 · 후보가 하나뿐"); return null; }
+    log(`핑 시작 · 후보 ${cands.join(", ")}`);
+
+    const ctrl = new AbortController();
+    let timedOut = false, over = false;
+    const onAbort = () => ctrl.abort();
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, timeoutMs);
+    const results = {};
+    const winner = await new Promise((resolve) => {
+      let pending = cands.length;
+      const fin = () => { if (--pending === 0) resolve(null); };
+      cands.forEach((mm) => {
+        pingModel(apiKey, mm, ctrl.signal).then((ms) => {
+          results[mm] = { model: mm, ms };
+          if (!over) { over = true; resolve({ model: mm, ms }); }
+        }, (e) => {
+          if (!over) {
+            results[mm] = { model: mm, why: timedOut ? "시간 초과" : isQuota(e) ? (isDailyQuota(e) ? "하루 한도 소진" : "분당 한도") : isOverloaded(e) ? "서버 과부하" : (e.status ? "HTTP " + e.status : String(e.message).slice(0, 30)) };
+            if (isDailyQuota(e)) onExhausted && onExhausted(mm);
+            else if (isOverloaded(e)) onBusy && onBusy(mm);
+          }
+          fin();
+        });
+      });
+    });
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener("abort", onAbort);
+    over = true; ctrl.abort();          // 늦은 핑은 취소한다
+    if (signal && signal.aborted) { const e = new Error("aborted"); e.name = "AbortError"; throw e; }
+    const tried = cands.map((mm) => results[mm] || { model: mm, why: winner ? "더 느림" : "시간 초과" });
+    tried.forEach((x) => log(`핑 결과 · ${x.model}: ${x.ms != null ? (x.ms / 1000).toFixed(1) + "초" : x.why}`));
+    if (!winner) { log("핑 실패 → 설정한 모델로 진행"); return null; }
+    log(`핑 선택 · ${winner.model} (${(winner.ms / 1000).toFixed(1)}초)`);
+    return { model: winner.model, ms: winner.ms, tried, cached: false, total: Date.now() - t0 };
+  }
+
   // ───────────── 긴 영상: 구간을 나눠 동시에 요약 ─────────────
   const fmtClock = (sec) => {
     sec = Math.max(0, Math.round(sec));
@@ -544,7 +629,18 @@
     return segs.length >= 2 ? segs : null;
   }
 
-  async function runSplit(args) {
+  async function runSplit(args0) {
+    let args = args0, pick = null;
+    if (args.autoPick) {
+      try { pick = await pickFastest(args); } catch (e) { if (e.name === "AbortError") throw e; }
+      if (pick) { args = Object.assign({}, args, { model: pick.model }); args.onPick && args.onPick(pick); }
+    }
+    const res = await runSplitInner(args);
+    if (pick && res && res.timing) res.timing.pick = pick;
+    return res;
+  }
+
+  async function runSplitInner(args) {
     const { id, duration, signal, onProgress, onRetry, onLog } = args;
     const plan = planSegments(duration);
     const log = (x) => onLog && onLog(x);
@@ -643,9 +739,18 @@
     }
     return lines;
   }
+  function pickLine(p) {
+    if (!p) return null;
+    if (p.cached) return `속도 측정(핑): 20분 이내 결과 재사용 → ${p.model}`;
+    return `속도 측정(핑) ${sec1(p.total)}: ` + (p.tried || []).map((x) => `${x.model} ${x.ms != null ? sec1(x.ms) : x.why}`).join(" · ") + ` → ${p.model} 선택`;
+  }
   function timingReport(t) {
     if (!t) return [];
-    if (t.split) return splitReport(t);
+    const extra = pickLine(t.pick);
+    const body = t.split ? splitReport(t) : timingReportBody(t);
+    return extra ? body.concat([extra]) : body;
+  }
+  function timingReportBody(t) {
     const pre = t.firstText != null && t.headers != null ? t.firstText - t.headers : null;   // 첫 글자까지 (영상 처리 + 추론)
     const gen = t.end != null && t.firstText != null ? t.end - t.firstText : null;          // 글 생성
     const over = (t.wait || 0) + (t.failed || 0);                                          // 재시도·대기·실패한 시도
@@ -898,10 +1003,10 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-24.1";
+  const VERSION = "2026-10-24.2";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
-    VERSION, fmtMs, timingReport, runSplit, planSegments, segmentPrompt, fmtClock,
+    VERSION, fmtMs, timingReport, pickFastest, PING_TTL, runSplit, planSegments, segmentPrompt, fmtClock,
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
     fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, isTokenMinute, resetTime, resetAt, failReason, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
   };

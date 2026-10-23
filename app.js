@@ -4,7 +4,7 @@
   const $ = (s) => document.querySelector(s);
   const SKEY = "ytnote.settings", HKEY = "ytnote.history", CKEY = "ytnote.lastClip";
   const DEFAULTS = {
-    apiKey: "", model: "gemini-flash-latest", fast: true, low: false, split: false, autoClip: true, notify: true,
+    apiKey: "", model: "gemini-flash-latest", fast: true, low: false, split: false, autoPick: true, autoClip: true, notify: true,
     vault: "", folder: "YouTube 요약",
     ttsModel: "gemini-3.8-flash-tts", voice: "Kore", rate: 1,
   };
@@ -43,7 +43,7 @@
     rate: $("#ttsRate"), prev: $("#ttsPrev"), next: $("#ttsNext"),
     hist: $("#hist"), histCount: $("#histCount"),
     dlg: $("#settings"), openSet: $("#openSet"),
-    sKey: $("#sKey"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sSplit: $("#sSplit"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
+    sKey: $("#sKey"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sSplit: $("#sSplit"), sPick: $("#sPick"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
     sVoice: $("#sVoice"), sTts: $("#sTts"), sVault: $("#sVault"), sFolder: $("#sFolder"),
     sSave: $("#sSave"), sClose: $("#sClose"), toast: $("#toast"),
   };
@@ -188,6 +188,7 @@
       else if (m.type === "lowOff") { settings.low = false; saveSettings(); toast("이 모델이 저해상도 옵션을 받지 않아 껐습니다"); }
       else if (m.type === "exhausted") markExhausted(m.model);
       else if (m.type === "busy") markBusy(m.model);
+      else if (m.type === "pick") recordPick(m.pick);
       else if (m.type === "fastOff") { settings.fast = false; saveSettings(); toast("이 모델이 빠른 모드를 받지 않아 빠른 모드를 껐습니다"); }
       else if (m.type === "open") {
         importInbox().then(() => { const h = history.find((x) => x.id === m.id); if (h) showEntry(h); });
@@ -213,10 +214,18 @@
   }
 
   // 모델 상태: 최근 과부하(10분) · 최근 성공 기록(속도)
-  const BKEY = "ytnote.busy", PKEY = "ytnote.perf";
+  const BKEY = "ytnote.busy", PKEY = "ytnote.perf", KKEY = "ytnote.pick", GKEY = "ytnote.ping";
   const busyNow = () => { const o = store.get(BKEY, {}), now = Date.now(); return Object.keys(o).filter((k) => o[k] > now); };
   function markBusy(model) { const o = store.get(BKEY, {}); o[model] = Date.now() + 10 * 60 * 1000; store.set(BKEY, o); }
   const goodModels = () => { const o = store.get(PKEY, {}), lim = Date.now() - 6 * 3600 * 1000; return Object.keys(o).filter((k) => o[k].ts > lim).sort((a, b) => o[b].ts - o[a].ts); };
+  // 핑 결과: 선택한 모델은 20분 동안 재사용하고, 모델별 핑 시간은 설정 화면에 보여 준다
+  function recordPick(p) {
+    if (!p || p.cached) return;
+    store.set(KKEY, { model: p.model, ms: p.ms, ts: Date.now() });
+    const g = store.get(GKEY, {});
+    for (const x of p.tried || []) if (x.ms != null) g[x.model] = { ms: x.ms, ts: Date.now() };
+    store.set(GKEY, g);
+  }
   function recordPerf(e) {
     const t = e && e.timing;
     if (!t || t.split || !t.model || t.firstText == null) return;
@@ -227,10 +236,13 @@
   function renderPerf() {
     const box = document.getElementById("perf"); if (!box) return;
     const o = store.get(PKEY, {}), keys = Object.keys(o).sort((a, b) => o[b].ts - o[a].ts).slice(0, 8);
-    box.textContent = keys.length ? keys.map((k) => {
+    const g = store.get(GKEY, {});
+    const lines = keys.map((k) => {
       const v = o[k], per = v.inTok ? (v.preMs / 1000 / (v.inTok / 1000)).toFixed(2) + "초/천토큰" : "";
       return `${k}: 첫 응답 ${(v.preMs / 1000).toFixed(0)}초 · 입력 ${v.inTok} ${per}`;
-    }).join("\n") : "(아직 없음)";
+    });
+    const pk = Object.keys(g).sort((a, b) => g[b].ts - g[a].ts).slice(0, 8).map((k) => `핑 ${k}: ${(g[k].ms / 1000).toFixed(1)}초 (${Math.round((Date.now() - g[k].ts) / 60000)}분 전)`);
+    box.textContent = lines.concat(pk).join("\n") || "(아직 없음)";
   }
   // 구간별 시간 패널
   function showTiming(t) {
@@ -241,7 +253,7 @@
     body.textContent = C.timingReport(t).join("\n");
     box.hidden = false;
   }
-  const STAGE = [["분할 요약", "구간별로 나눠 동시에 처리 중"], ["요청 보냄", "서버가 영상을 처리하는 중"], ["응답 HTTP 200", "첫 글자를 기다리는 중"], ["오류", "재시도 준비"], ["첫 글자", "글을 쓰는 중"], ["연결 끊김", "재시도 대기"]];
+  const STAGE = [["핑", "모델 속도를 재는 중"], ["분할 요약", "구간별로 나눠 동시에 처리 중"], ["요청 보냄", "서버가 영상을 처리하는 중"], ["응답 HTTP 200", "첫 글자를 기다리는 중"], ["오류", "재시도 준비"], ["첫 글자", "글을 쓰는 중"], ["연결 끊김", "재시도 대기"]];
   const stage = new Map();
   // 진단 로그: 설정 > 진단 로그에서 본다 (마지막 80줄만 저장)
   const LKEY = "ytnote.log";
@@ -358,7 +370,7 @@
     el.url.value = `https://www.youtube.com/watch?v=${id}`;
     showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
     setStatus("영상 분석 중…" + jobsNote(), "live");
-    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, split: !!settings.split, duration: 0, notify: !!settings.notify, skip: exhaustedNow(), busy: busyNow(), good: goodModels() };
+    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, split: !!settings.split, autoPick: !!settings.autoPick, pickCache: store.get(KKEY, null), duration: 0, notify: !!settings.notify, skip: exhaustedNow(), busy: busyNow(), good: goodModels() };
     jobs.set(id, { md: "", title: "" });
     started.set(id, Date.now());
     refreshBar();
@@ -391,6 +403,7 @@
         onFastRejected: () => { settings.fast = false; saveSettings(); },
         onLowRejected: () => { settings.low = false; saveSettings(); },
         onBusy: markBusy,
+        onPick: recordPick,
         onLog: (line) => addLog(id, line),
         onRetry: (info) => { if (viewId === id) showRetry(info); },
         onExhausted: markExhausted,
@@ -799,6 +812,7 @@
     el.sFast.checked = !!settings.fast;
     el.sLow.checked = !!settings.low;
     el.sSplit.checked = !!settings.split;
+    el.sPick.checked = !!settings.autoPick;
     renderLog(); renderPerf();
     el.sAuto.checked = !!settings.autoClip;
     el.sNotify.checked = !!settings.notify;
@@ -818,6 +832,7 @@
       fast: el.sFast.checked,
       low: el.sLow.checked,
       split: el.sSplit.checked,
+      autoPick: el.sPick.checked,
       autoClip: el.sAuto.checked,
       notify: el.sNotify.checked,
       voice: el.sVoice.value || DEFAULTS.voice,

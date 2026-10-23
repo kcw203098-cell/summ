@@ -282,6 +282,7 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
       </datalist>
       <small>틀린 이름이면 사용 가능한 flash 모델로 자동으로 바꿉니다.</small>
     </label>
+    <label class="check" for="sPick"><input id="sPick" type="checkbox"> 요약 전 가장 빠른 모델 자동 선택 (후보 3개에 짧은 영상으로 핑을 보내 먼저 답한 모델을 씁니다. 결과는 20분 동안 재사용합니다. 후보 모델마다 요청 1개씩 씁니다. 켜면 위의 모델 설정은 후보 중 하나가 됩니다)</label>
     <label class="check" for="sSplit"><input id="sSplit" type="checkbox"> 긴 영상 분할 요약 (12분 넘는 영상을 최대 4구간으로 나눠 동시에 요약. 빠르지만 요청이 구간 수만큼 늘어 하루 한도를 더 씁니다)</label>
     <label class="check" for="sLow"><input id="sLow" type="checkbox"> 프레임 해상도 낮춤 (실험. 빠른 요약이 켜져 있을 때만 적용. 켠 뒤 요약이 멈추면 끄세요)</label>
     <label class="check" for="sFast"><input id="sFast" type="checkbox"> 빠른 요약 (영상 프레임을 5초에 1장만 보고, 추론을 줄입니다. 말 위주 영상은 품질 차이가 작습니다)</label>
