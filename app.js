@@ -433,19 +433,25 @@
     }
     if (!settings.apiKey) { openSettings(); setStatus("먼저 Gemini API 키를 넣어 주세요.", "warn"); return; }
 
-    viewId = id;
-    current = null;
+    // 먼저 요청한 요약이 아직 진행 중이면 화면을 뺏지 않는다. 새 요청은 뒤에서 하고 결과는 목록에 쌓는다
+    const queued = getReqs().some((r) => jobs.has(r.id));
     addReq(id);
-    el.url.value = `https://www.youtube.com/watch?v=${id}`;
-    showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
-    setStatus("영상 분석 중…" + jobsNote(), "live");
+    if (queued) {
+      toast("뒤에서 요약합니다. 끝나면 최근 요약 목록에 쌓입니다.");
+    } else {
+      viewId = id;
+      current = null;
+      el.url.value = `https://www.youtube.com/watch?v=${id}`;
+      showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
+      setStatus("영상 분석 중…" + jobsNote(), "live");
+    }
     const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, split: !!settings.split, autoPick: !!settings.autoPick, pickCache: store.get(KKEY, null), duration: 0, notify: !!settings.notify, skip: exhaustedNow(), busy: busyNow(), good: goodModels() };
     jobs.set(id, { md: "", title: "" });
     started.set(id, Date.now());
     refreshBar();
     if (job.split) {
       lenWait.set(id, { cancelled: false });
-      showWaiting("영상 길이를 확인하고 있습니다…");
+      if (!queued) showWaiting("영상 길이를 확인하고 있습니다…");
       const t = Date.now();
       job.duration = (await ytDuration(id, 8000)) || 0;
       addLog(id, `영상 길이 확인 ${job.duration ? C.fmtClock(job.duration) : "실패(분할 안 함)"} (${((Date.now() - t) / 1000).toFixed(1)}초)`);
