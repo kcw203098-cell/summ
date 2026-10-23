@@ -97,9 +97,12 @@ button.primary { background: var(--accent); color: var(--accent-ink); border-col
 button.btn:disabled { opacity: .5; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-#status { font: 500 13px/1.5 var(--font-mono); color: var(--muted); min-height: 1.5em; display: flex; align-items: center; gap: 8px; }
+/* 높이를 2줄로 고정한다: 글이 1줄↔2줄로 바뀌어도 아래 화면이 움직이지 않는다 */
+#status { position: relative; font: 500 13px/1.5 var(--font-mono); color: var(--muted); height: 3em; overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+#status[data-kind="live"] { padding-left: 16px; }
 #status[data-kind="live"] { color: var(--live); }
-#status[data-kind="live"]::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: pulse 1.2s infinite; flex: none; }
+#status[data-kind="live"]::before { content: ""; position: absolute; left: 0; top: .5em; width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: pulse 1.2s infinite; }
 #status[data-kind="ok"] { color: var(--accent); }
 #status[data-kind="warn"], #status[data-kind="err"] { color: var(--err); }
 @keyframes pulse { 50% { opacity: .25; } }
