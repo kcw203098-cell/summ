@@ -258,7 +258,7 @@
   const BKEY = "ytnote.busy", PKEY = "ytnote.perf", KKEY = "ytnote.pick", GKEY = "ytnote.ping";
   const busyNow = () => { const o = store.get(BKEY, {}), now = Date.now(); return Object.keys(o).filter((k) => o[k] > now); };
   function markBusy(model) { const o = store.get(BKEY, {}); o[model] = Date.now() + 10 * 60 * 1000; store.set(BKEY, o); }
-  const goodModels = () => { const o = store.get(PKEY, {}), lim = Date.now() - 6 * 3600 * 1000; return Object.keys(o).filter((k) => o[k].ts > lim).sort((a, b) => o[b].ts - o[a].ts); };
+  const goodModels = () => { const o = store.get(PKEY, {}), lim = Date.now() - 6 * 3600 * 1000; return Object.keys(o).filter((k) => o[k].ts > lim).sort((a, b) => (o[a].preMs - o[b].preMs) || (o[b].ts - o[a].ts)); };
   // 핑 결과: 선택한 모델은 20분 동안 재사용하고, 모델별 핑 시간은 설정 화면에 보여 준다
   function recordPick(p) {
     if (!p || p.cached) return;
@@ -271,7 +271,7 @@
     const t = e && e.timing;
     if (!t || t.split || !t.model || t.firstText == null) return;
     const o = store.get(PKEY, {});
-    o[t.model] = { ts: e.ts || Date.now(), inTok: (t.tok || {}).in || 0, preMs: t.firstText, level: t.level };
+    o[t.model] = { ts: e.ts || Date.now(), inTok: (t.tok || {}).in || 0, thinkTok: (t.tok || {}).think || 0, preMs: t.firstText, level: t.level };
     store.set(PKEY, o);
   }
   function renderPerf() {
@@ -279,8 +279,8 @@
     const o = store.get(PKEY, {}), keys = Object.keys(o).sort((a, b) => o[b].ts - o[a].ts).slice(0, 8);
     const g = store.get(GKEY, {});
     const lines = keys.map((k) => {
-      const v = o[k], per = v.inTok ? (v.preMs / 1000 / (v.inTok / 1000)).toFixed(2) + "초/천토큰" : "";
-      return `${k}: 첫 응답 ${(v.preMs / 1000).toFixed(0)}초 · 입력 ${v.inTok} ${per}`;
+      const v = o[k];
+      return `${k}: 첫 응답 ${(v.preMs / 1000).toFixed(0)}초 · 입력 ${v.inTok}토큰 · 추론 ${v.thinkTok == null ? "-" : v.thinkTok}토큰 (${Math.round((Date.now() - v.ts) / 60000)}분 전)`;
     });
     const pk = Object.keys(g).sort((a, b) => g[b].ts - g[a].ts).slice(0, 8).map((k) => `핑 ${k}: ${(g[k].ms / 1000).toFixed(1)}초 (${Math.round((Date.now() - g[k].ts) / 60000)}분 전)`);
     box.textContent = lines.concat(pk).join("\n") || "(아직 없음)";

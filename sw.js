@@ -2,7 +2,7 @@
 importScripts("core.js");
 const Core = self.Core;
 
-const CACHE = "ytnote-v24";
+const CACHE = "ytnote-v25";
 const SHELL = ["./", "index.html", "core.js", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
