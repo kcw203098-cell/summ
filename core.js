@@ -1007,7 +1007,7 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-24.7";
+  const VERSION = "2026-10-24.8";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
     VERSION, fmtMs, timingReport, pickFastest, PING_TTL, runSplit, planSegments, segmentPrompt, fmtClock,

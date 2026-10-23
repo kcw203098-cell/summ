@@ -774,7 +774,7 @@
     await copyText(current.md, "마크다운");
     const folder = (settings.folder || "").trim().replace(/^\/+|\/+$/g, "");
     const d = new Date(current.ts || Date.now()), z = (n) => String(n).padStart(2, "0");
-    const stamp = `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}${z(d.getMinutes())}`;
+    const stamp = `${z(d.getFullYear() % 100)}${z(d.getMonth() + 1)}${z(d.getDate())} ${z(d.getHours())}${z(d.getMinutes())}`;
     const name = C.safeName(`${stamp} ${current.title}`);
     const q = [];
     if (settings.vault) q.push("vault=" + encodeURIComponent(settings.vault));
