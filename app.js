@@ -900,7 +900,7 @@
     el.sLow.checked = !!settings.low;
     el.sSplit.checked = !!settings.split;
     el.sPick.checked = !!settings.autoPick;
-    el.sTheme.value = settings.theme || "auto";
+    if (el.sTheme) el.sTheme.value = settings.theme || "auto";
     renderLog(); renderPerf();
     el.sAuto.checked = !!settings.autoClip;
     el.sNotify.checked = !!settings.notify;
@@ -921,7 +921,7 @@
       low: el.sLow.checked,
       split: el.sSplit.checked,
       autoPick: el.sPick.checked,
-      theme: el.sTheme.value,
+      theme: el.sTheme ? el.sTheme.value : settings.theme,
       autoClip: el.sAuto.checked,
       notify: el.sNotify.checked,
       voice: el.sVoice.value || DEFAULTS.voice,
