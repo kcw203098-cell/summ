@@ -43,7 +43,7 @@
     rate: $("#ttsRate"), prev: $("#ttsPrev"), next: $("#ttsNext"),
     hist: $("#hist"), histCount: $("#histCount"),
     dlg: $("#settings"), openSet: $("#openSet"),
-    sKey: $("#sKey"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sSplit: $("#sSplit"), sPick: $("#sPick"), sTheme: $("#sTheme"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
+    sKey: $("#sKey"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sSplit: $("#sSplit"), sPick: $("#sPick"), sTheme: $("#sTheme"), sSize: $("#sSize"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
     sVoice: $("#sVoice"), sTts: $("#sTts"), sVault: $("#sVault"), sFolder: $("#sFolder"),
     sSave: $("#sSave"), sClose: $("#sClose"), toast: $("#toast"),
   };
@@ -65,6 +65,7 @@
     [el.cpMd, el.cpTxt, el.share, el.obs].forEach((b) => (b.disabled = !done));
     el.bar.hidden = !(done || player.entry);
     el.stop.hidden = !jobs.has(viewId);
+    el.paste.hidden = !el.stop.hidden;
     updatePlayerUI();
   }
   const short = (t) => (t && t.length > 26 ? t.slice(0, 26) + "…" : t || "");
@@ -78,8 +79,31 @@
     el.empty.hidden = true;
     el.out.hidden = false;
     el.out.innerHTML = C.mdToHtml(md);
+    polish(el.out);
     el.out.classList.toggle("streaming", !done);
     markSection();
+  }
+  // 읽기 좋게 다듬기 (마크다운 원문은 그대로 두고 화면만 바꾼다)
+  function polish(root) {
+    try {
+      const ul = root.querySelector("h1 + ul");
+      if (ul) {
+        const kv = {};
+        ul.querySelectorAll("li").forEach((li) => { const m = li.textContent.match(/^([^:：]+)[:：]\s*(.*)$/); if (m) kv[m[1].trim()] = m[2].trim(); });
+        const meta = document.createElement("div"); meta.className = "meta";
+        const add = (txt, cls) => { const sp = document.createElement("span"); sp.textContent = txt; if (cls) sp.className = cls; meta.appendChild(sp); };
+        if (kv["채널"]) add(kv["채널"], "ch");
+        if (kv["요약일"]) add(kv["요약일"].replace(/^\d{4}-/, ""));
+        if (kv["링크"]) { const a = document.createElement("a"); a.href = kv["링크"]; a.target = "_blank"; a.rel = "noopener"; a.textContent = "▶ 원본"; meta.appendChild(a); }
+        ul.replaceWith(meta);
+      }
+      const h2 = [...root.querySelectorAll("h2")].find((h) => /^한 줄 요약/.test(h.textContent));
+      if (h2) {
+        const box = document.createElement("div"); box.className = "tldr";
+        h2.before(box); box.appendChild(h2);
+        while (box.nextElementSibling && !/^H[1-3]$/.test(box.nextElementSibling.tagName)) box.appendChild(box.nextElementSibling);
+      }
+    } catch (e) {}
   }
   function showWaiting(text) {
     const tb = document.getElementById("timing"); if (tb) tb.hidden = true;
@@ -312,7 +336,7 @@
     const box = document.getElementById("timing"), body = document.getElementById("timingBody"), sum = document.getElementById("timingSum");
     if (!box) return;
     if (!t) { box.hidden = true; return; }
-    sum.textContent = "⏱ 구간별 시간 · 총 " + C.fmtMs(t.total);
+    sum.textContent = "⏱ 구간별 시간 · 총 " + C.fmtMs(t.total) + (t.model ? " · " + t.model : "");
     body.textContent = C.timingReport(t).join("\n");
     box.hidden = false;
   }
@@ -342,7 +366,7 @@
   setInterval(() => {
     if (!viewId || !jobs.has(viewId) || !started.has(viewId) || el.status.dataset.kind !== "live") return;
     const sec = Math.round((Date.now() - started.get(viewId)) / 1000);
-    el.status.textContent = el.status.textContent.replace(/ · (단계|경과) .*$/, "") + (stage.get(viewId) ? " · 단계 " + stage.get(viewId) : "") + " · 경과 " + (sec < 60 ? sec + "초" : Math.floor(sec / 60) + "분 " + (sec % 60) + "초");
+    el.status.textContent = el.status.textContent.replace(/ ▸ .*$/, "") + " ▸ " + (stage.get(viewId) ? stage.get(viewId) + " · " : "") + (sec < 60 ? sec + "초" : Math.floor(sec / 60) + "분 " + (sec % 60) + "초");
   }, 1000);
   const started = new Map();   // 요약 시작 시각 (방금 시작한 작업을 사라진 것으로 오인하지 않게)
   const resumed = new Set();   // 자동 재시작은 영상마다 한 번만 (요청 낭비 방지)
@@ -698,7 +722,7 @@
     el.playLabel.textContent = on ? "일시정지" : active && player.i > 0 && (sameAsView || !current) ? "이어 듣기" : "듣기";
     el.prev.hidden = el.next.hidden = !active;
     el.rate.textContent = `${settings.rate}×`;
-    let p = "요약을 소리로 읽어 줍니다";
+    let p = "";
     if (active) {
       const n = player.chunks.length;
       const made = player.urls.filter(Boolean).length;
@@ -892,6 +916,9 @@
     m.content = dark ? "#0f1513" : "#0f6b5c"; document.head.appendChild(m);
   }
   applyTheme(settings.theme);
+  const SIZES = { s: 15, m: 16.5, l: 18, xl: 20 };
+  function applySize(k) { document.documentElement.style.setProperty("--fs", (SIZES[k] || SIZES.m) + "px"); }
+  applySize(settings.size);
   function openSettings() {
     const v = document.getElementById("ver"); if (v) v.textContent = "버전 " + C.VERSION;
     el.sKey.value = settings.apiKey;
@@ -901,6 +928,7 @@
     el.sSplit.checked = !!settings.split;
     el.sPick.checked = !!settings.autoPick;
     if (el.sTheme) el.sTheme.value = settings.theme || "auto";
+    if (el.sSize) el.sSize.value = settings.size || "m";
     renderLog(); renderPerf();
     el.sAuto.checked = !!settings.autoClip;
     el.sNotify.checked = !!settings.notify;
@@ -922,6 +950,7 @@
       split: el.sSplit.checked,
       autoPick: el.sPick.checked,
       theme: el.sTheme ? el.sTheme.value : settings.theme,
+      size: el.sSize ? el.sSize.value : settings.size,
       autoClip: el.sAuto.checked,
       notify: el.sNotify.checked,
       voice: el.sVoice.value || DEFAULTS.voice,
@@ -931,6 +960,7 @@
     });
     saveSettings();
     applyTheme(settings.theme);
+    applySize(settings.size);
     askNotifyPermission();
     el.dlg.close();
     toast("설정을 저장했습니다");

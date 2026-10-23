@@ -31,6 +31,7 @@
   --font-body: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
   --r: 14px;
+  --fs: 16.5px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -51,7 +52,7 @@ body {
   background: var(--bg); color: var(--ink);
   font: 16px/1.7 var(--font-body);
   padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(132px + env(safe-area-inset-bottom, 0px));
   -webkit-text-size-adjust: 100%;
 }
 [hidden] { display: none !important; }
@@ -59,7 +60,7 @@ body {
   max-width: 720px; margin: 0 auto;
   padding-left: max(16px, env(safe-area-inset-left, 0px));
   padding-right: max(16px, env(safe-area-inset-right, 0px));
-  display: grid; gap: 14px;
+  display: grid; gap: 12px;
   grid-template-columns: minmax(0, 1fr); /* 긴 제목이 칸을 넓히지 못하게 */
 }
 .wrap > * { min-width: 0; }
@@ -99,31 +100,39 @@ button.btn:disabled { opacity: .5; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* 높이를 2줄로 고정한다: 글이 1줄↔2줄로 바뀌어도 아래 화면이 움직이지 않는다 */
-#status { position: relative; font: 500 13px/1.5 var(--font-mono); color: var(--muted); height: 3em; overflow: hidden;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
-#status[data-kind="live"] { padding-left: 16px; }
-#status[data-kind="live"] { color: var(--live); }
-#status[data-kind="live"]::before { content: ""; position: absolute; left: 0; top: .5em; width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: pulse 1.2s infinite; }
-#status[data-kind="ok"] { color: var(--accent); }
-#status[data-kind="warn"], #status[data-kind="err"] { color: var(--err); }
+#status { position: relative; font: 500 13px/1.45 var(--font-body); color: var(--muted); height: calc(2.9em + 16px); overflow: hidden;
+  padding: 8px 12px; border-radius: 12px; background: transparent;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; word-break: keep-all; overflow-wrap: anywhere; }
+#status:empty { visibility: hidden; }
+#status[data-kind="live"] { padding-left: 30px; color: var(--live); background: color-mix(in srgb, var(--live) 12%, transparent); }
+#status[data-kind="live"]::before { content: ""; position: absolute; left: 12px; top: 14px; width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: pulse 1.2s infinite; }
+#status[data-kind="ok"] { color: var(--accent); background: var(--accent-soft); }
+#status[data-kind="warn"], #status[data-kind="err"] { color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); }
 @keyframes pulse { 50% { opacity: .25; } }
 
 .note {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
-  padding: 22px 20px; min-width: 0; overflow-wrap: anywhere;
+  padding: 18px 18px 8px; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs); line-height: 1.75;
 }
-.note h1 { font: 600 1.35rem/1.35 var(--font-display); margin: 0 0 12px; text-wrap: balance; letter-spacing: -0.015em; }
+.note h1 { font: 600 1.3em/1.4 var(--font-display); margin: 0 0 8px; text-wrap: balance; letter-spacing: -0.015em; }
 .note h2 {
-  font: 600 1.05rem/1.4 var(--font-display); margin: 26px 0 8px; color: var(--accent);
+  font: 600 1.02em/1.4 var(--font-display); margin: 28px 0 10px; color: var(--accent);
   padding-bottom: 6px; border-bottom: 1px solid var(--line);
 }
+.note .meta { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin: 0 0 16px; font: 500 12.5px/1.6 var(--font-body); color: var(--muted); }
+.note .meta span + span::before, .note .meta a::before { content: "·"; margin-right: 10px; color: var(--line); }
+.note .meta .ch { color: var(--ink); font-weight: 700; }
+.note .meta .mdl { font-family: var(--font-mono); font-size: 11.5px; }
+.note .meta a { font-weight: 700; text-decoration: none; word-break: normal; }
+.note .tldr { background: var(--accent-soft); border-radius: 12px; padding: 12px 14px 4px; margin: 0 0 6px; border-left: 3px solid var(--accent); }
+.note .tldr h2 { font: 700 12px/1.4 var(--font-mono); letter-spacing: .06em; margin: 0 0 4px; padding: 0; border: 0; }
+.note .tldr p { font-weight: 500; margin: 0 0 10px; }
+.note li::marker { color: var(--accent); }
 .note h3 { font: 700 1rem/1.45 var(--font-body); margin: 20px 0 6px; }
-.note p { margin: 0 0 14px; }
-.note ul, .note ol { margin: 0 0 14px; padding-left: 1.3em; }
-.note li { margin: 4px 0; }
+.note p { margin: 0 0 14px; word-break: keep-all; overflow-wrap: break-word; }
+.note ul, .note ol { margin: 0 0 14px; padding-left: 1.25em; }
+.note li { margin: 6px 0; word-break: keep-all; overflow-wrap: break-word; }
 .note li.d1 { margin-left: 1.2em; } .note li.d2 { margin-left: 2.4em; } .note li.d3 { margin-left: 3.6em; }
-.note h1 + ul { font-size: 13px; color: var(--muted); list-style: none; padding: 0; }
-.note h1 + ul li { margin: 0; }
 .note a { color: var(--accent); word-break: break-all; }
 .note code { font: 14px var(--font-mono); background: var(--accent-soft); padding: 1px 5px; border-radius: 5px; }
 .note blockquote { margin: 0 0 14px; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
@@ -141,20 +150,20 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   border-top: 1px solid var(--line);
-  padding: 10px max(16px, env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  padding: 8px max(16px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
 }
 #bar .row { max-width: 720px; margin: 0 auto; display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 8px; }
-#bar button { padding: 0 8px; font-size: 14px; }
+#bar button { padding: 0 8px; font-size: 14px; height: 44px; }
 #bar button.primary { flex: none; }
 #bar button:disabled { opacity: .45; }
-.player { max-width: 720px; margin: 0 auto 8px; display: flex; align-items: center; gap: 6px; min-width: 0; }
-.player .btn { height: 40px; }
+.player { max-width: 720px; margin: 0 auto 6px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+#bar .player .btn { height: 38px; }
 .player .play { padding: 0 14px 0 10px; gap: 6px; background: var(--accent-soft); color: var(--accent); border-color: transparent; flex: none; }
 .player .play.on { background: var(--accent); color: var(--accent-ink); }
 .player .play svg, .player .chip svg { width: 20px; height: 20px; flex: none; }
 .player .chip { padding: 0 9px; flex: none; }
 .player .rate { font: 500 13px var(--font-mono); min-width: 52px; }
-.tprog { flex: 1; min-width: 0; font: 500 12px/1.3 var(--font-mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tprog { flex: 1; text-align: right; min-width: 0; font: 500 12px/1.3 var(--font-mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .note h2.speaking { color: var(--live); border-bottom-color: var(--live); }
 .note h2.speaking::before { content: "♪ "; }
 
@@ -187,7 +196,7 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
 
 #toast {
   position: fixed; left: 50%; transform: translateX(-50%); z-index: 20;
-  bottom: calc(138px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(124px + env(safe-area-inset-bottom, 0px));
   background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px;
   font: 600 14px var(--font-body); box-shadow: 0 6px 20px rgb(0 0 0 / .2);
 }
@@ -216,10 +225,6 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
       <button class="btn" id="stop" type="button" hidden>멈춤</button>
     </div>
     <div id="status" role="status" aria-live="polite"></div>
-    <details id="timing" hidden>
-      <summary id="timingSum">⏱ 구간별 시간</summary>
-      <pre id="timingBody"></pre>
-    </details>
   </section>
 
   <div class="empty" id="empty">
@@ -232,6 +237,10 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
   </div>
 
   <article class="note" id="out" hidden></article>
+  <details id="timing" hidden>
+    <summary id="timingSum">⏱ 구간별 시간</summary>
+    <pre id="timingBody"></pre>
+  </details>
 
   <details class="hist">
     <summary>최근 요약 <span id="histCount">0</span>개</summary>
@@ -263,7 +272,7 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
 </nav>
 
 <style>
-#timing{margin:6px 0 0;font-size:13px;color:var(--muted)}
+#timing{margin:0;font-size:12px;color:var(--muted)}
 #timing summary{cursor:pointer;padding:4px 0}
 #timing pre{white-space:pre-wrap;word-break:break-word;font:12px/1.6 var(--font-mono);margin:4px 0 0;padding:10px 12px;background:rgba(127,127,127,.1);border-radius:10px;user-select:text}
 </style>
@@ -285,6 +294,9 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
     </label>
     <label for="sTheme">화면 색상
       <select id="sTheme"><option value="auto">기기 설정 따라가기</option><option value="light">라이트</option><option value="dark">다크</option></select>
+    </label>
+    <label for="sSize">글자 크기
+      <select id="sSize"><option value="s">작게</option><option value="m">보통</option><option value="l">크게</option><option value="xl">아주 크게</option></select>
     </label>
     <label class="check" for="sPick"><input id="sPick" type="checkbox"> 요약 전 가장 빠른 모델 자동 선택 (후보 3개에 짧은 영상으로 핑을 보내 먼저 답한 모델을 씁니다. 결과는 20분 동안 재사용합니다. 후보 모델마다 요청 1개씩 씁니다. 켜면 위의 모델 설정은 후보 중 하나가 됩니다)</label>
     <label class="check" for="sSplit"><input id="sSplit" type="checkbox"> 긴 영상 분할 요약 (12분 넘는 영상을 최대 4구간으로 나눠 동시에 요약. 빠르지만 요청이 구간 수만큼 늘어 하루 한도를 더 씁니다)</label>
