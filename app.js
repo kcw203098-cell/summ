@@ -43,7 +43,7 @@
     rate: $("#ttsRate"), prev: $("#ttsPrev"), next: $("#ttsNext"),
     hist: $("#hist"), histCount: $("#histCount"),
     dlg: $("#settings"), openSet: $("#openSet"),
-    sKey: $("#sKey"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sSplit: $("#sSplit"), sPick: $("#sPick"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
+    sKey: $("#sKey"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sSplit: $("#sSplit"), sPick: $("#sPick"), sTheme: $("#sTheme"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
     sVoice: $("#sVoice"), sTts: $("#sTts"), sVault: $("#sVault"), sFolder: $("#sFolder"),
     sSave: $("#sSave"), sClose: $("#sClose"), toast: $("#toast"),
   };
@@ -883,6 +883,15 @@
   }
 
   // ───────────── 설정 ─────────────
+  function applyTheme(t) {
+    const r = document.documentElement;
+    if (t === "dark" || t === "light") r.setAttribute("data-theme", t); else r.removeAttribute("data-theme");
+    document.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.remove());
+    const m = document.createElement("meta"); m.name = "theme-color";
+    const dark = t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+    m.content = dark ? "#0f1513" : "#0f6b5c"; document.head.appendChild(m);
+  }
+  applyTheme(settings.theme);
   function openSettings() {
     const v = document.getElementById("ver"); if (v) v.textContent = "버전 " + C.VERSION;
     el.sKey.value = settings.apiKey;
@@ -891,6 +900,7 @@
     el.sLow.checked = !!settings.low;
     el.sSplit.checked = !!settings.split;
     el.sPick.checked = !!settings.autoPick;
+    el.sTheme.value = settings.theme || "auto";
     renderLog(); renderPerf();
     el.sAuto.checked = !!settings.autoClip;
     el.sNotify.checked = !!settings.notify;
@@ -911,6 +921,7 @@
       low: el.sLow.checked,
       split: el.sSplit.checked,
       autoPick: el.sPick.checked,
+      theme: el.sTheme.value,
       autoClip: el.sAuto.checked,
       notify: el.sNotify.checked,
       voice: el.sVoice.value || DEFAULTS.voice,
@@ -919,6 +930,7 @@
       folder: el.sFolder.value.trim(),
     });
     saveSettings();
+    applyTheme(settings.theme);
     askNotifyPermission();
     el.dlg.close();
     toast("설정을 저장했습니다");

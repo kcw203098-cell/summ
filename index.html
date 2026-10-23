@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>YT 요약노트</title>
+<script>try{var t=(JSON.parse(localStorage.getItem("ytnote.settings"))||{}).theme;if(t==="dark"||t==="light")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <meta name="theme-color" content="#0f6b5c" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0f1513" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.webmanifest">
@@ -281,6 +282,9 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
         <option value="gemini-3.8-flash">3.8 Flash</option>
       </datalist>
       <small>틀린 이름이면 사용 가능한 flash 모델로 자동으로 바꿉니다.</small>
+    </label>
+    <label for="sTheme">화면 색상
+      <select id="sTheme"><option value="auto">기기 설정 따라가기</option><option value="light">라이트</option><option value="dark">다크</option></select>
     </label>
     <label class="check" for="sPick"><input id="sPick" type="checkbox"> 요약 전 가장 빠른 모델 자동 선택 (후보 3개에 짧은 영상으로 핑을 보내 먼저 답한 모델을 씁니다. 결과는 20분 동안 재사용합니다. 후보 모델마다 요청 1개씩 씁니다. 켜면 위의 모델 설정은 후보 중 하나가 됩니다)</label>
     <label class="check" for="sSplit"><input id="sSplit" type="checkbox"> 긴 영상 분할 요약 (12분 넘는 영상을 최대 4구간으로 나눠 동시에 요약. 빠르지만 요청이 구간 수만큼 늘어 하루 한도를 더 씁니다)</label>
