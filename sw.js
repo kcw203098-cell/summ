@@ -2,7 +2,7 @@
 importScripts("core.js");
 const Core = self.Core;
 
-const CACHE = "ytnote-v19";
+const CACHE = "ytnote-v20";
 const SHELL = ["./", "index.html", "core.js", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -56,8 +56,8 @@ async function runJob(job) {
   running.set(job.id, r);
   let last = 0;
   try {
-    const res = await Core.runSummary({
-      id: job.id, apiKey: job.apiKey, model: job.model, fast: job.fast, low: job.low, signal: ctrl.signal,
+    const res = await Core.runSplit({
+      id: job.id, apiKey: job.apiKey, model: job.model, fast: job.fast, low: job.low, duration: job.split ? job.duration : 0, signal: ctrl.signal,
       onLog: (line) => broadcast({ type: "log", id: job.id, line }),
       onLowRejected: () => broadcast({ type: "lowOff" }),
       onProgress: ({ meta, url, acc }) => {
@@ -72,7 +72,7 @@ async function runJob(job) {
       skip: job.skip,
       onExhausted: (model) => broadcast({ type: "exhausted", model }),
     });
-    const entry = { id: job.id, title: res.meta.title || job.id, md: res.md, ts: Date.now(), model: res.model, ms: res.ms, timing: res.timing };
+    const entry = { id: job.id, title: res.meta.title || job.id, md: res.md, ts: Date.now(), model: res.model, ms: res.ms, timing: res.timing, partial: res.partial || 0 };
     await Core.idb.put("inbox", entry); // 화면이 꺼져 있어도 다음에 열 때 가져간다
     const cs = await broadcast({ type: "done", id: job.id, entry });
     if (!anyVisible(cs)) await notify(job, "요약 완료", entry.title, job.id);

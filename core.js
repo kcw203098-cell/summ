@@ -243,12 +243,13 @@
 
   // fast=true: 프레임을 5초에 1장만 보고(fps 0.2), 추론을 줄인다(thinking low)
   // fast: false/0 = 기본, 1 = 프레임만 줄임(5초에 1장), true/2 = 프레임 + 추론 줄임
-  function summaryBody(url, fast, low) {
+  function summaryBody(url, fast, low, range) {
     const level = fast === true ? 2 : +fast || 0;
     const video = { file_data: { file_uri: url } };
-    const body = { contents: [{ role: "user", parts: [video, { text: PROMPT }] }] };
+    const body = { contents: [{ role: "user", parts: [video, { text: range ? segmentPrompt(range) : PROMPT }] }] };
+    if (range) video.video_metadata = { start_offset: `${range.start}s`, end_offset: `${range.end}s` };
     if (level >= 1) {
-      video.video_metadata = { fps: 0.2 };
+      video.video_metadata = Object.assign(video.video_metadata || {}, { fps: 0.2 });
       // low: 프레임당 토큰 258 → 66 (실험 옵션, 설정에서 켠다)
       if (low) body.generationConfig = { mediaResolution: "MEDIA_RESOLUTION_LOW" };
     }
@@ -256,7 +257,7 @@
     return body;
   }
 
-  async function streamSummary({ apiKey, model, url, fast, low, signal, onText, onLog, stats }) {
+  async function streamSummary({ apiKey, model, url, fast, low, range, signal, onText, onLog, stats }) {
     const log = onLog || (() => {});
     const t = Date.now(), lv = fast === true ? 2 : +fast || 0;
     const rec = { model, level: lv, low: !!(low && lv) };
@@ -269,7 +270,7 @@
       r = await fetch(`${API}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
         method: "POST", signal,
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify(summaryBody(url, fast, low)),
+        body: JSON.stringify(summaryBody(url, fast, low, range)),
       });
     } catch (e) { log(`연결 실패 (${sec()}초): ${e.name} ${String(e.message).slice(0, 50)}`); fail(e); throw e; }
     rec.headers = Date.now() - t;
@@ -341,7 +342,7 @@
   // - 빠른 옵션이 거부되면 기본 옵션으로 다시 한다
   // - 모델이 없으면 다른 flash 모델로 바꾸고 설정에 저장한다
   // - 서버 과부하면 같은 모델로 2번 더 기다렸다 하고, 그래도 안 되면 다른 모델로 넘어간다 (설정은 그대로)
-  async function runSummary({ id, apiKey, model, fast: fastIn, low: lowIn, signal, onProgress, onModel, onFastRejected, onLowRejected, onRetry, onLog, skip, onExhausted }) {
+  async function runSummary({ id, apiKey, model, fast: fastIn, low: lowIn, range, metaIn, noLadder, signal, onProgress, onModel, onFastRejected, onLowRejected, onRetry, onLog, skip, onExhausted }) {
     skip = (skip || []).slice();
     const report = [];   // 모델별 실패 이유
     const markExhausted = (mm, e) => {
@@ -352,8 +353,8 @@
     const t0 = Date.now();
     const stats = { attempts: [], waitMs: 0, listMs: 0, metaMs: null };
     // 제목 조회는 요약과 동시에 한다 (기다리지 않는다)
-    let meta = {};
-    const metaP = fetchMeta(url).then((x) => { meta = x || {}; stats.metaMs = Date.now() - t0; return meta; });
+    let meta = metaIn || {};
+    const metaP = metaIn ? Promise.resolve(metaIn) : fetchMeta(url).then((x) => { meta = x || {}; stats.metaMs = Date.now() - t0; return meta; });
     const onText = (acc) => onProgress && onProgress({ meta, url, acc });
     onText("");
     let m = model || "gemini-flash-latest";
@@ -373,7 +374,9 @@
       if (alt) { m = alt; onRetry && onRetry({ reason: "skip", model: alt }); }
     }
     const tryFastThenPlain = async (mm) => {
-      const base = { apiKey, model: mm, url, signal, onText, onLog, stats };
+      const base = { apiKey, model: mm, url, range, signal, onText, onLog, stats };
+      // 구간 요약: 옵션을 낮춰 가며 재시도하지 않는다 (호출한 쪽이 한 번에 판단한다)
+      if (noLadder) return streamSummary(Object.assign({ fast: fastIn === true ? 2 : +fastIn || 0, low }, base));
       if (!fast) return streamSummary(Object.assign({ fast: false, low: false }, base));
       try {
         return await streamSummary(Object.assign({ fast: true, low }, base));
@@ -480,6 +483,117 @@
     return { meta, url, body, model: m, ms: Date.now() - t0, timing, md: buildMarkdown(meta, url, body, null, m) };
   }
 
+  // ───────────── 긴 영상: 구간을 나눠 동시에 요약 ─────────────
+  const fmtClock = (sec) => {
+    sec = Math.max(0, Math.round(sec));
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    const mm = String(m).padStart(2, "0"), ss = String(s).padStart(2, "0");
+    return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  };
+
+  // 구간 요약용 프롬프트: 시점은 쓰지 않는다 (잘라 낸 영상에서 시점 기준이 불확실하다)
+  function segmentPrompt(range) {
+    return `이 유튜브 영상 중 ${fmtClock(range.start)}부터 ${fmtClock(range.end)}까지 구간만 한국어로 자세히 요약해 줘.
+
+[규칙]
+- 영상 언어와 상관없이 모두 한국어로 쓴다. 전문 용어는 처음 나올 때 원어를 괄호에 함께 쓴다.
+- 이 구간에 나오는 내용만 쓴다. 구간 밖 내용이나 영상 전체 결론은 쓰지 않는다.
+- 구간 경계에서 말이 잘렸을 수 있다. 잘린 문장은 억지로 완성하지 말고 들린 부분만 쓴다.
+- 영상에 없는 내용은 덧붙이지 않는다. 확실하지 않은 부분은 "(불확실)"이라고 표시한다.
+- 시점(mm:ss)은 쓰지 않는다.
+- 인사말·맺음말 없이 바로 본문을 시작한다.
+- 문단과 문단 사이, 제목과 본문 사이에는 반드시 빈 줄을 하나 넣는다.
+
+[형식 - 마크다운]
+**핵심 포인트**
+
+- (2~5개 불릿)
+
+### (소제목)
+2~5문장짜리 문단. 수치·예시·근거는 빠뜨리지 않는다.
+이 구간의 흐름 순서대로 ### 소제목을 나눈다.
+`;
+  }
+
+  // 영상 길이(초)로 구간 계획을 만든다. 12분 이하이거나 길이를 모르면 null (한 번에 요약)
+  function planSegments(durationSec, opts) {
+    const o = Object.assign({ minSec: 12 * 60, targetSec: 10 * 60, maxSegs: 4 }, opts || {});
+    const D = Math.floor(+durationSec || 0);
+    if (!D || D <= o.minSec) return null;
+    const n = Math.min(o.maxSegs, Math.ceil(D / o.targetSec));
+    if (n < 2) return null;
+    const len = Math.ceil(D / n / 10) * 10;
+    const segs = [];
+    for (let i = 0; i < n; i++) {
+      const start = i * len;
+      const end = i === n - 1 ? Math.max(start + 10, D - 1) : (i + 1) * len;   // 마지막 구간은 끝에서 1초 모자라게 (길이 오차로 거부되지 않게)
+      if (start < D) segs.push({ start, end });
+    }
+    return segs.length >= 2 ? segs : null;
+  }
+
+  async function runSplit(args) {
+    const { id, duration, signal, onProgress, onRetry, onLog } = args;
+    const plan = planSegments(duration);
+    const log = (x) => onLog && onLog(x);
+    if (!plan) { log(`분할 안 함 · 영상 길이 ${duration ? fmtClock(duration) : "모름"}`); return runSummary(args); }
+    const n = plan.length;
+    const url = `https://www.youtube.com/watch?v=${id}`;
+    const t0 = Date.now();
+    log(`분할 요약 · 영상 ${fmtClock(duration)} → ${n}구간 동시 (${plan.map((r) => fmtClock(r.start) + "–" + fmtClock(r.end)).join(", ")})`);
+    let meta = {};
+    const metaP = fetchMeta(url).then((x) => { meta = x || {}; return meta; });
+    const texts = plan.map(() => "");
+    const head = (r, i) => `## 구간 ${i + 1} · ${fmtClock(r.start)}–${fmtClock(r.end)}`;
+    const combine = (done) => plan.map((r, i) => head(r, i) + "\n\n" + (texts[i] || (done ? "" : "(요약 중…)"))).join("\n\n");
+    const emit = () => onProgress && onProgress({ meta, url, acc: combine(false) });
+    emit();
+    const is400 = (e) => e && e.status === 400 && !isKeyError(e);
+    const lv0 = args.fast === true ? 2 : +args.fast || 0;
+    const levels = lv0 >= 2 ? [2, 1] : [lv0];
+    let settled = null;
+    for (const level of levels) {
+      plan.forEach((r, i) => { texts[i] = ""; });
+      const start = (i) => runSummary(Object.assign({}, args, {
+        fast: level, noLadder: true, range: plan[i], metaIn: {},
+        onProgress: ({ acc }) => { texts[i] = acc; emit(); },
+        onLog: (x) => log(`[구간 ${i + 1}] ${x}`),
+        onRetry: (info) => onRetry && onRetry(Object.assign({}, info, { seg: i + 1, of: n })),
+      })).then((v) => ({ status: "fulfilled", value: v }), (e) => ({ status: "rejected", reason: e }));
+      // 첫 구간을 먼저 보내고 2초 안에 구간 지정을 거부(400)하면 나머지는 보내지 않는다 (요청 낭비 방지)
+      const p0 = start(0);
+      const early = await Promise.race([p0, sleep(2000)]);
+      if (early && early.status === "rejected" && is400(early.reason)) { log(`구간 요청 400 (옵션 ${level}) → ${level > levels[levels.length - 1] ? "옵션을 낮춰 다시" : "분할 포기"}`); continue; }
+      const rest = await Promise.all(plan.slice(1).map((r, k) => start(k + 1)));
+      const all = [await p0].concat(rest);
+      if (all.every((x) => x.status === "rejected" && is400(x.reason))) { log(`모든 구간이 400 (옵션 ${level})`); continue; }
+      settled = all; break;
+    }
+    if (!settled) {
+      if (signal && signal.aborted) { const e = new Error("aborted"); e.name = "AbortError"; throw e; }
+      log("구간 요청이 거부되어 전체 영상을 한 번에 요약합니다");
+      onRetry && onRetry({ reason: "nosplit", model: args.model });
+      return runSummary(args);
+    }
+    const ok = settled.map((s) => (s.status === "fulfilled" ? s.value : null));
+    const bad = settled.map((s, i) => (s.status === "rejected" ? { i, e: s.reason } : null)).filter(Boolean);
+    if (!ok.some(Boolean)) throw bad[0].e;
+    const FAIL = (e) => `⚠ 이 구간은 요약하지 못했습니다. ${friendlyBase(e).split("\n")[0].slice(0, 120)}`;
+    bad.forEach(({ i, e }) => { texts[i] = FAIL(e); });
+    plan.forEach((r, i) => { if (ok[i]) texts[i] = ok[i].body; });
+    await Promise.race([metaP, sleep(2500)]);
+    const body = combine(true);
+    const models = [...new Set(ok.filter(Boolean).map((r) => r.model))];
+    const model = models.join(", ");
+    const total = Date.now() - t0;
+    const timing = {
+      split: n, total, model, failed: bad.length, segRange: plan,
+      segs: ok.map((r) => (r && r.timing) || null),
+    };
+    timingReport(timing).forEach((x) => log("⏱ " + x));
+    return { meta, url, body, model, ms: total, timing, partial: bad.length, md: buildMarkdown(meta, url, body, null, model) };
+  }
+
   // ───────────── 구간별 시간 ─────────────
   // 마지막으로 성공한 시도를 기준으로 구간을 나눈다
   function makeTiming(stats, total, model) {
@@ -495,8 +609,31 @@
   }
   const sec1 = (ms) => (ms == null ? "-" : (ms / 1000).toFixed(1) + "초");
   const pct = (a, t) => (t ? Math.round((a / t) * 100) + "%" : "");
+  function splitReport(t) {
+    const segs = t.segs || [];
+    const pre = segs.map((x) => (x ? (x.firstText != null ? x.firstText : x.headers) || 0 : 0));
+    const gen = segs.map((x) => (x && x.end != null && x.firstText != null ? x.end - x.firstText : 0));
+    const over = segs.map((x) => (x ? (x.wait || 0) + (x.failed || 0) : 0));
+    const sum = (a) => a.reduce((n, v) => n + v, 0);
+    const slow = pre.indexOf(Math.max(...pre));
+    const lines = [`총 ${sec1(t.total)} · 분할 ${t.split}구간 동시 · ${t.model || ""}${t.failed ? ` · 실패 ${t.failed}구간` : ""}`];
+    segs.forEach((x, i) => {
+      const r = (t.segRange || [])[i];
+      lines.push(`구간 ${i + 1}${r ? ` (${fmtClock(r.start)}–${fmtClock(r.end)})` : ""}: ` + (x ? `첫 응답 ${sec1(pre[i])} · 글 ${sec1(gen[i])}${over[i] ? ` · 재시도·대기 ${sec1(over[i])}` : ""} · 입력 ${(x.tok || {}).in ?? "-"}토큰` : "실패"));
+    });
+    if (segs.some(Boolean)) {
+      // 한 번에 요약했다면: 구간 처리 시간이 합쳐지고 글도 한 번에 쓴다 (비례 가정, 추정)
+      const est = sum(pre) + sum(gen);
+      lines.push(`가장 느린 구간: 구간 ${slow + 1} (첫 응답 ${sec1(pre[slow])})`);
+      if (!t.failed) lines.push(`한 번에 요약했다면 약 ${sec1(est)} (구간 시간 합, 추정) → 분할 효과 약 ${(est / t.total).toFixed(1)}배`);
+      const tin = sum(segs.map((x) => (x && x.tok && x.tok.in) || 0)), tout = sum(segs.map((x) => (x && x.tok && x.tok.out) || 0));
+      lines.push(`토큰 합계: 입력 ${tin} · 출력 ${tout} · 요청 ${sum(segs.map((x) => (x ? x.tries || 1 : 0)))}번`);
+    }
+    return lines;
+  }
   function timingReport(t) {
     if (!t) return [];
+    if (t.split) return splitReport(t);
     const pre = t.firstText != null && t.headers != null ? t.firstText - t.headers : null;   // 첫 글자까지 (영상 처리 + 추론)
     const gen = t.end != null && t.firstText != null ? t.end - t.firstText : null;          // 글 생성
     const over = (t.wait || 0) + (t.failed || 0);                                          // 재시도·대기·실패한 시도
@@ -749,10 +886,10 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-23.6";
+  const VERSION = "2026-10-23.7";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
-    VERSION, fmtMs, timingReport,
+    VERSION, fmtMs, timingReport, runSplit, planSegments, segmentPrompt, fmtClock,
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
     fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, isTokenMinute, resetTime, resetAt, failReason, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
   };

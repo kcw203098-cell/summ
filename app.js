@@ -4,7 +4,7 @@
   const $ = (s) => document.querySelector(s);
   const SKEY = "ytnote.settings", HKEY = "ytnote.history", CKEY = "ytnote.lastClip";
   const DEFAULTS = {
-    apiKey: "", model: "gemini-flash-latest", fast: true, low: false, autoClip: true, notify: true,
+    apiKey: "", model: "gemini-flash-latest", fast: true, low: false, split: false, autoClip: true, notify: true,
     vault: "", folder: "YouTube 요약",
     ttsModel: "gemini-3.8-flash-tts", voice: "Kore", rate: 1,
   };
@@ -43,7 +43,7 @@
     rate: $("#ttsRate"), prev: $("#ttsPrev"), next: $("#ttsNext"),
     hist: $("#hist"), histCount: $("#histCount"),
     dlg: $("#settings"), openSet: $("#openSet"),
-    sKey: $("#sKey"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
+    sKey: $("#sKey"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sSplit: $("#sSplit"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
     sVoice: $("#sVoice"), sTts: $("#sTts"), sVault: $("#sVault"), sFolder: $("#sFolder"),
     sSave: $("#sSave"), sClose: $("#sClose"), toast: $("#toast"),
   };
@@ -152,6 +152,7 @@
     if (viewId === id) {
       showEntry(entry, true);
       showTiming(entry.timing);
+      if (entry.partial) toast(`${entry.partial}개 구간은 요약하지 못했습니다. 문서에 표시했습니다.`);
       setStatus("완료" + (entry.model ? " · " + entry.model : "") + (entry.ms ? " · " + C.fmtMs(entry.ms) : "") + " · 아래 버튼으로 복사하거나 들으세요." + jobsNote(), "ok");
     } else {
       toast(`요약 완료 · ${short(entry.title)}`);
@@ -218,14 +219,14 @@
     body.textContent = C.timingReport(t).join("\n");
     box.hidden = false;
   }
-  const STAGE = [["요청 보냄", "서버가 영상을 처리하는 중"], ["응답 HTTP 200", "첫 글자를 기다리는 중"], ["오류", "재시도 준비"], ["첫 글자", "글을 쓰는 중"], ["연결 끊김", "재시도 대기"]];
+  const STAGE = [["분할 요약", "구간별로 나눠 동시에 처리 중"], ["요청 보냄", "서버가 영상을 처리하는 중"], ["응답 HTTP 200", "첫 글자를 기다리는 중"], ["오류", "재시도 준비"], ["첫 글자", "글을 쓰는 중"], ["연결 끊김", "재시도 대기"]];
   const stage = new Map();
   // 진단 로그: 설정 > 진단 로그에서 본다 (마지막 80줄만 저장)
   const LKEY = "ytnote.log";
   let logLines = store.get(LKEY, []);
   function addLog(id, line) {
     const t = new Date().toLocaleTimeString("ko-KR", { hour12: false });
-    for (const [k, v] of STAGE) if (line.startsWith(k)) stage.set(id, v);
+    if (!line.startsWith("[구간")) for (const [k, v] of STAGE) if (line.startsWith(k)) stage.set(id, v);
     logLines.push(`${t} ${String(id).slice(0, 5)} ${line}`);
     if (logLines.length > 80) logLines = logLines.slice(-80);
     store.set(LKEY, logLines);
@@ -244,7 +245,10 @@
   const started = new Map();   // 요약 시작 시각 (방금 시작한 작업을 사라진 것으로 오인하지 않게)
   const resumed = new Set();   // 자동 재시작은 영상마다 한 번만 (요청 낭비 방지)
   function showRetry(info) {
-    const text = info.reason === "skip"
+    const pre = info.seg ? `구간 ${info.seg}/${info.of}: ` : "";
+    const text = pre + (info.reason === "nosplit"
+      ? "구간 요청이 거부되어 전체 영상을 한 번에 요약합니다…"
+      : info.reason === "skip"
       ? `설정한 모델은 오늘 한도가 찼습니다. ${info.model}(으)로 요약합니다…`
       : info.reason === "switch"
       ? `이 모델을 지금 쓸 수 없어 다른 모델(${info.model})로 요약합니다…`
@@ -254,10 +258,54 @@
       ? `연결이 끊겼습니다. ${Math.round(info.wait / 1000)}초 뒤 다시 시도합니다 (${info.attempt}/${info.of}). 앱을 화면에 두면 더 안정적입니다…`
       : info.reason === "rate"
       ? `분당 요청 한도에 걸렸습니다. ${Math.round(info.wait / 1000)}초 기다렸다 다시 합니다…`
-      : `Google 서버가 바쁩니다. ${Math.round(info.wait / 1000)}초 뒤 다시 시도합니다 (${info.attempt}/2)…`;
+      : `Google 서버가 바쁩니다. ${Math.round(info.wait / 1000)}초 뒤 다시 시도합니다 (${info.attempt}/2)…`);
+    if (info.seg) { setStatus(text.slice(0, 60) + jobsNote(), "live"); return; }   // 분할 중에는 이미 나온 구간 글을 지우지 않는다
     showWaiting(text);
     setStatus("재시도 중" + jobsNote(), "live");
   }
+
+  // ───────────── 영상 길이 확인 (숨은 YouTube 플레이어) ─────────────
+  // 임베드가 막힌 영상이나 오프라인이면 null → 분할 없이 한 번에 요약한다
+  function ytDuration(id, timeoutMs) {
+    return new Promise((resolve) => {
+      let done = false, player = null, holder = null, iv = null;
+      const finish = (v) => {
+        if (done) return; done = true; clearTimeout(tm); clearInterval(iv);
+        try { player && player.destroy(); } catch {}
+        if (holder) holder.remove();
+        resolve(v);
+      };
+      const tm = setTimeout(() => finish(null), timeoutMs || 8000);
+      const init = () => {
+        try {
+          holder = document.createElement("div");
+          holder.style.cssText = "position:fixed;left:-9999px;top:0;width:200px;height:120px;opacity:0;pointer-events:none";
+          const inner = document.createElement("div");
+          holder.appendChild(inner); document.body.appendChild(holder);
+          player = new window.YT.Player(inner, {
+            videoId: id, host: "https://www.youtube-nocookie.com",
+            playerVars: { controls: 0, mute: 1, playsinline: 1, rel: 0 },
+            events: {
+              onReady: (e) => {
+                const get = () => { try { return +e.target.getDuration() || 0; } catch { return 0; } };
+                if (get() > 0) return finish(get());
+                iv = setInterval(() => { const d = get(); if (d > 0) finish(d); }, 250);   // 메타데이터가 늦게 들어오는 경우
+              },
+              onError: () => finish(null),
+            },
+          });
+        } catch { finish(null); }
+      };
+      if (window.YT && window.YT.Player) init();
+      else {
+        window.onYouTubeIframeAPIReady = init;
+        const sc = document.createElement("script");
+        sc.src = "https://www.youtube.com/iframe_api"; sc.async = true; sc.onerror = () => finish(null);
+        document.head.appendChild(sc);
+      }
+    });
+  }
+  const lenWait = new Map();   // 길이 확인 중인 영상 (멈춤 처리용)
 
   // ───────────── 요약 실행 ─────────────
   function askNotifyPermission() {
@@ -286,10 +334,20 @@
     el.url.value = `https://www.youtube.com/watch?v=${id}`;
     showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
     setStatus("영상 분석 중…" + jobsNote(), "live");
-    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, notify: !!settings.notify, skip: exhaustedNow() };
+    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, split: !!settings.split, duration: 0, notify: !!settings.notify, skip: exhaustedNow() };
     jobs.set(id, { md: "", title: "" });
     started.set(id, Date.now());
     refreshBar();
+    if (job.split) {
+      lenWait.set(id, { cancelled: false });
+      showWaiting("영상 길이를 확인하고 있습니다…");
+      const t = Date.now();
+      job.duration = (await ytDuration(id, 8000)) || 0;
+      addLog(id, `영상 길이 확인 ${job.duration ? C.fmtClock(job.duration) : "실패(분할 안 함)"} (${((Date.now() - t) / 1000).toFixed(1)}초)`);
+      const w = lenWait.get(id); lenWait.delete(id);
+      if (w && w.cancelled) { onError(id, "요약을 멈췄습니다.", true); return; }
+      if (viewId === id) showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
+    }
 
     const ctrl = swCtrl();
     if (ctrl) { ctrl.postMessage({ type: "summarize", job }); return; }
@@ -297,7 +355,7 @@
     // 서비스 워커가 아직 없을 때(첫 실행 직후 등): 화면에서 직접 요약한다
     localCtrl = new AbortController();
     try {
-      const res = await C.runSummary(Object.assign({}, job, {
+      const res = await C.runSplit(Object.assign({}, job, {
         signal: localCtrl.signal,
         onProgress: ({ meta, url, acc }) => {
           jobs.set(id, { md: C.buildMarkdown(meta, url, acc), title: meta.title || "" });
@@ -312,7 +370,7 @@
         onRetry: (info) => { if (viewId === id) showRetry(info); },
         onExhausted: markExhausted,
       }));
-      onDone(id, { id, title: res.meta.title || id, md: res.md, ts: Date.now(), model: res.model, ms: res.ms });
+      onDone(id, { id, title: res.meta.title || id, md: res.md, ts: Date.now(), model: res.model, ms: res.ms, timing: res.timing, partial: res.partial || 0 });
     } catch (e) {
       onError(id, C.friendly(e), e.name === "AbortError");
     } finally {
@@ -631,6 +689,8 @@
   el.url.addEventListener("keydown", (e) => { if (e.key === "Enter") runFromInput(false); });
   el.url.addEventListener("paste", () => setTimeout(() => runFromInput(false), 0));
   el.stop.addEventListener("click", () => {
+    const w = lenWait.get(viewId);
+    if (w) { w.cancelled = true; return; }
     if (localCtrl) localCtrl.abort();
     else if (swCtrl() && viewId) swCtrl().postMessage({ type: "cancel", id: viewId });
   });
@@ -713,6 +773,7 @@
     el.sModel.value = settings.model;
     el.sFast.checked = !!settings.fast;
     el.sLow.checked = !!settings.low;
+    el.sSplit.checked = !!settings.split;
     renderLog();
     el.sAuto.checked = !!settings.autoClip;
     el.sNotify.checked = !!settings.notify;
@@ -731,6 +792,7 @@
       model: el.sModel.value.trim() || DEFAULTS.model,
       fast: el.sFast.checked,
       low: el.sLow.checked,
+      split: el.sSplit.checked,
       autoClip: el.sAuto.checked,
       notify: el.sNotify.checked,
       voice: el.sVoice.value || DEFAULTS.voice,
