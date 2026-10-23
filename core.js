@@ -165,7 +165,7 @@
     const texts = [];
     const lines = buffer.split("\n");
     const rest = lines.pop();
-    let err = null;
+    let err = null, usage = null, any = false;
     for (const raw of lines) {
       const line = raw.trim();
       if (!line.startsWith("data:")) continue;
@@ -173,12 +173,14 @@
       if (!payload || payload === "[DONE]") continue;
       try {
         const j = JSON.parse(payload);
+        any = true;
+        if (j.usageMetadata) usage = j.usageMetadata;
         if (j.error) err = j.error.message || "API 오류";
         const parts = (((j.candidates || [])[0] || {}).content || {}).parts || [];
         for (const p of parts) if (p.text && !p.thought) texts.push(p.text);
       } catch (e) { /* 깨진 줄은 건너뛴다 */ }
     }
-    return { texts, rest, err };
+    return { texts, rest, err, usage, any };
   }
 
   // ───────────── 네트워크: 요약 (화면과 서비스 워커가 함께 쓴다) ─────────────
@@ -254,10 +256,14 @@
     return body;
   }
 
-  async function streamSummary({ apiKey, model, url, fast, low, signal, onText, onLog }) {
+  async function streamSummary({ apiKey, model, url, fast, low, signal, onText, onLog, stats }) {
     const log = onLog || (() => {});
     const t = Date.now(), lv = fast === true ? 2 : +fast || 0;
-    log(`요청 보냄 · ${model} · 옵션 ${lv}${low && lv ? "+저해상도" : ""}`);
+    const rec = { model, level: lv, low: !!(low && lv) };
+    if (stats) stats.attempts.push(rec);
+    const sec = () => Math.round((Date.now() - t) / 1000);
+    const fail = (e) => { rec.failed = true; rec.end = Date.now() - t; rec.err = e.status || e.name || "오류"; };
+    log(`요청 보냄 · ${model} · 옵션 ${lv}${rec.low ? "+저해상도" : ""}`);
     let r;
     try {
       r = await fetch(`${API}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
@@ -265,27 +271,36 @@
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify(summaryBody(url, fast, low)),
       });
-    } catch (e) { log(`연결 실패 (${Math.round((Date.now() - t) / 1000)}초): ${e.name} ${String(e.message).slice(0, 50)}`); throw e; }
-    log(`응답 HTTP ${r.status} (${Math.round((Date.now() - t) / 1000)}초)`);
-    if (!r.ok) { const er = await apiError(r); log(`오류: ${String(er.message).slice(0, 90)}`); throw er; }
+    } catch (e) { log(`연결 실패 (${sec()}초): ${e.name} ${String(e.message).slice(0, 50)}`); fail(e); throw e; }
+    rec.headers = Date.now() - t;
+    log(`응답 HTTP ${r.status} (${sec()}초)`);
+    if (!r.ok) { const er = await apiError(r); log(`오류: ${String(er.message).slice(0, 90)}`); fail(er); throw er; }
     const reader = r.body.getReader();
     const dec = new TextDecoder();
-    let buf = "", acc = "", first = true;
+    let buf = "", acc = "";
+    const take = (res) => {
+      if (res.usage) rec.usage = res.usage;
+      if (res.any && rec.firstData == null) rec.firstData = Date.now() - t;
+      if (res.texts.length) {
+        if (rec.firstText == null) { rec.firstText = Date.now() - t; log(`첫 글자 ${sec()}초`); }
+        acc += res.texts.join(""); onText && onText(acc);
+      }
+    };
     for (;;) {
       let chunk;
       try { chunk = await reader.read(); }
-      catch (e) { log(`스트림 끊김 (${Math.round((Date.now() - t) / 1000)}초, 글자 ${acc.length}): ${e.name} ${String(e.message).slice(0, 40)}`); throw e; }
+      catch (e) { log(`스트림 끊김 (${sec()}초, 글자 ${acc.length}): ${e.name} ${String(e.message).slice(0, 40)}`); fail(e); throw e; }
       const { value, done } = chunk;
-      if (done) { log(`스트림 끝 (${Math.round((Date.now() - t) / 1000)}초, 글자 ${acc.length})`); break; }
-      if (first) { first = false; log(`첫 데이터 ${Math.round((Date.now() - t) / 1000)}초`); }
+      if (done) break;
       buf += dec.decode(value, { stream: true }).replace(/\r/g, "");
-      const { texts, rest, err } = parseSSE(buf);
-      buf = rest;
-      if (err) throw new Error(err);
-      if (texts.length) { acc += texts.join(""); onText && onText(acc); }
+      const res = parseSSE(buf);
+      buf = res.rest;
+      if (res.err) { log(`스트림 오류: ${String(res.err).slice(0, 90)}`); const e = new Error(res.err); fail(e); throw e; }
+      take(res);
     }
-    const tail = parseSSE(buf + "\n");
-    if (tail.texts.length) { acc += tail.texts.join(""); onText && onText(acc); }
+    take(parseSSE(buf + "\n"));
+    rec.end = Date.now() - t; rec.chars = acc.length;
+    log(`스트림 끝 (${sec()}초, 글자 ${acc.length})`);
     return acc;
   }
 
@@ -335,9 +350,10 @@
     };
     const url = `https://www.youtube.com/watch?v=${id}`;
     const t0 = Date.now();
+    const stats = { attempts: [], waitMs: 0, listMs: 0, metaMs: null };
     // 제목 조회는 요약과 동시에 한다 (기다리지 않는다)
     let meta = {};
-    const metaP = fetchMeta(url).then((x) => { meta = x || {}; return meta; });
+    const metaP = fetchMeta(url).then((x) => { meta = x || {}; stats.metaMs = Date.now() - t0; return meta; });
     const onText = (acc) => onProgress && onProgress({ meta, url, acc });
     onText("");
     let m = model || "gemini-flash-latest";
@@ -345,14 +361,19 @@
     const log = (x) => onLog && onLog(x);
     log(`시작 · ${m} · 빠른 ${fast ? "켬" : "끔"} · 저해상도 ${low ? "켬" : "끔"}`);
     let modelList = null;
-    const getModels = async () => modelList || (modelList = await listModels(apiKey));
+    const getModels = async () => {
+      if (modelList) return modelList;
+      const t = Date.now(); modelList = await listModels(apiKey); stats.listMs += Date.now() - t;
+      return modelList;
+    };
+    const waitFor = async (ms) => { stats.waitMs += ms; await sleep(ms, signal); };
     // 오늘 한도가 찬 모델이면 처음부터 다른 모델로 시작한다 (요청을 헛되이 쓰지 않게)
     if (skip.includes(m)) {
       const alt = altFlashModels(await getModels(), skip)[0];
       if (alt) { m = alt; onRetry && onRetry({ reason: "skip", model: alt }); }
     }
     const tryFastThenPlain = async (mm) => {
-      const base = { apiKey, model: mm, url, signal, onText, onLog };
+      const base = { apiKey, model: mm, url, signal, onText, onLog, stats };
       if (!fast) return streamSummary(Object.assign({ fast: false, low: false }, base));
       try {
         return await streamSummary(Object.assign({ fast: true, low }, base));
@@ -407,7 +428,7 @@
           onText("");
           log(`연결 끊김 → ${Math.round(w / 1000)}초 뒤 재시도 ${netTry}/${netWaits.length}`);
           onRetry && onRetry({ reason: "network", wait: w, model: m, attempt: netTry, of: netWaits.length });
-          await sleep(w, signal);
+          await waitFor(w);
           await whenOnline(signal);
           attempt--;                       // 과부하 재시도 횟수는 쓰지 않는다
           continue;
@@ -427,13 +448,13 @@
           const w = Math.ceil((e.retryDelay || 20) + 1) * 1000;   // 분당 한도: 안내된 시간만큼 한 번만 기다린다
           onText("");
           onRetry && onRetry({ reason: "rate", wait: w, model: m, attempt: 1 });
-          await sleep(w, signal);
+          await waitFor(w);
           continue;
         }
         if (!isOverloaded(e)) break;
         onText("");
         onRetry && onRetry({ reason: "overloaded", wait: waits[attempt], model: m, attempt: attempt + 1 });
-        await sleep(waits[attempt], signal);
+        await waitFor(waits[attempt]);
       }
     }
     // 한도는 모델마다 따로 센다 → 다른 모델은 한도가 남아 있을 수 있다
@@ -454,8 +475,57 @@
     if (lastErr) { lastErr.report = report; throw lastErr; }
     if (!String(body).trim()) throw new Error("빈 응답을 받았습니다. 다시 시도하세요.");
     await Promise.race([metaP, sleep(2500)]);
-    log(`완료 · ${m} · ${Math.round((Date.now() - t0) / 1000)}초 · 글자 ${String(body).length}`);
-    return { meta, url, body, model: m, ms: Date.now() - t0, md: buildMarkdown(meta, url, body, null, m) };
+    const timing = makeTiming(stats, Date.now() - t0, m);
+    timingReport(timing).forEach((x) => log("⏱ " + x));
+    return { meta, url, body, model: m, ms: Date.now() - t0, timing, md: buildMarkdown(meta, url, body, null, m) };
+  }
+
+  // ───────────── 구간별 시간 ─────────────
+  // 마지막으로 성공한 시도를 기준으로 구간을 나눈다
+  function makeTiming(stats, total, model) {
+    const fin = [...stats.attempts].reverse().find((a) => !a.failed) || {};
+    const failed = stats.attempts.filter((a) => a.failed).reduce((n, a) => n + (a.end || 0), 0);
+    const u = fin.usage || {};
+    return {
+      total, model, level: fin.level, low: fin.low, tries: stats.attempts.length,
+      meta: stats.metaMs, list: stats.listMs, wait: stats.waitMs, failed,
+      headers: fin.headers, firstText: fin.firstText, end: fin.end, chars: fin.chars,
+      tok: { in: u.promptTokenCount, think: u.thoughtsTokenCount, out: u.candidatesTokenCount },
+    };
+  }
+  const sec1 = (ms) => (ms == null ? "-" : (ms / 1000).toFixed(1) + "초");
+  const pct = (a, t) => (t ? Math.round((a / t) * 100) + "%" : "");
+  function timingReport(t) {
+    if (!t) return [];
+    const pre = t.firstText != null && t.headers != null ? t.firstText - t.headers : null;   // 첫 글자까지 (영상 처리 + 추론)
+    const gen = t.end != null && t.firstText != null ? t.end - t.firstText : null;          // 글 생성
+    const over = (t.wait || 0) + (t.failed || 0);                                          // 재시도·대기·실패한 시도
+    const rows = [
+      ["재시도·대기·실패한 시도", over],
+      ["모델 목록 조회", t.list || 0],
+      ["서버 접속·응답 시작", t.headers],
+      ["첫 글자까지 (영상 처리+추론)", pre],
+      ["글 생성", gen],
+    ];
+    const lines = [`총 ${sec1(t.total)} · ${t.model || ""} · 옵션 ${t.level == null ? "-" : t.level}${t.low ? "+저해상도" : ""} · 시도 ${t.tries}번`];
+    for (const [k, v] of rows) lines.push(`${k}: ${sec1(v)} ${v ? pct(v, t.total) : ""}`.trim());
+    lines.push(`제목 조회: ${sec1(t.meta)} (요약과 동시에 함)`);
+    const k = t.tok || {};
+    if (k.in != null || k.out != null) lines.push(`토큰: 입력 ${k.in ?? "-"} · 추론 ${k.think ?? 0} · 출력 ${k.out ?? "-"}`);
+    if (gen > 0 && t.chars) lines.push(`생성 속도: ${Math.round(t.chars / (gen / 1000))}글자/초 (${t.chars}글자)`);
+    // 가장 큰 구간 → 가능한 원인 (추정)
+    const big = rows.filter((r) => r[1] != null).sort((a, b) => b[1] - a[1])[0];
+    if (big && big[1] > 0) {
+      const hint = {
+        "재시도·대기·실패한 시도": "실패하고 다시 한 시간이 큽니다. 연결 끊김이나 서버 과부하일 수 있습니다. 진단 로그를 보세요.",
+        "모델 목록 조회": "모델 목록을 가져오는 데 오래 걸렸습니다.",
+        "서버 접속·응답 시작": "접속이나 응답 시작이 느립니다. 네트워크 상태일 수 있습니다.",
+        "첫 글자까지 (영상 처리+추론)": "영상 처리나 추론이 느립니다. 프레임 해상도 낮춤, lite 모델을 시험해 보세요." + ((k.think || 0) > 1000 ? ` 추론 토큰 ${k.think}개가 쓰였습니다.` : ""),
+        "글 생성": "글을 쓰는 시간이 큽니다. 출력이 길거나 모델 속도가 느립니다. lite 모델이 더 빠를 수 있습니다.",
+      }[big[0]];
+      lines.push(`가장 큰 구간: ${big[0]} → ${hint} (추정)`);
+    }
+    return lines;
   }
 
   // 하루 한도는 미국 태평양 시간 자정에 다시 채워진다 → 사용자의 현지 시각으로 바꿔 보여 준다
@@ -673,10 +743,10 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-23.2";
+  const VERSION = "2026-10-23.3";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
-    VERSION, fmtMs,
+    VERSION, fmtMs, timingReport,
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
     fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, isTokenMinute, resetTime, resetAt, failReason, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
   };

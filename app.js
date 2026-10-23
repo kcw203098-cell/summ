@@ -82,6 +82,7 @@
     markSection();
   }
   function showWaiting(text) {
+    const tb = document.getElementById("timing"); if (tb) tb.hidden = true;
     el.empty.hidden = true;
     el.out.hidden = false;
     el.out.classList.remove("streaming");
@@ -96,6 +97,7 @@
   function showEntry(e, quiet) {
     viewId = e.id;
     current = e;
+    showTiming(e.timing);
     render(e.md, true);
     el.url.value = `https://youtu.be/${e.id}`;
     if (!quiet) setStatus(`저장된 요약${e.model ? " · " + e.model : ""} · ${short(e.title)}${jobsNote()}`, "ok");
@@ -144,6 +146,7 @@
     C.idb.del("inbox", id).catch(() => {});
     if (viewId === id) {
       showEntry(entry, true);
+      showTiming(entry.timing);
       setStatus("완료" + (entry.model ? " · " + entry.model : "") + (entry.ms ? " · " + C.fmtMs(entry.ms) : "") + " · 아래 버튼으로 복사하거나 들으세요." + jobsNote(), "ok");
     } else {
       toast(`요약 완료 · ${short(entry.title)}`);
@@ -201,11 +204,23 @@
     });
   }
 
+  // 구간별 시간 패널
+  function showTiming(t) {
+    const box = document.getElementById("timing"), body = document.getElementById("timingBody"), sum = document.getElementById("timingSum");
+    if (!box) return;
+    if (!t) { box.hidden = true; return; }
+    sum.textContent = "⏱ 구간별 시간 · 총 " + C.fmtMs(t.total);
+    body.textContent = C.timingReport(t).join("\n");
+    box.hidden = false;
+  }
+  const STAGE = [["요청 보냄", "서버가 영상을 처리하는 중"], ["응답 HTTP 200", "첫 글자를 기다리는 중"], ["오류", "재시도 준비"], ["첫 글자", "글을 쓰는 중"], ["연결 끊김", "재시도 대기"]];
+  const stage = new Map();
   // 진단 로그: 설정 > 진단 로그에서 본다 (마지막 80줄만 저장)
   const LKEY = "ytnote.log";
   let logLines = store.get(LKEY, []);
   function addLog(id, line) {
     const t = new Date().toLocaleTimeString("ko-KR", { hour12: false });
+    for (const [k, v] of STAGE) if (line.startsWith(k)) stage.set(id, v);
     logLines.push(`${t} ${String(id).slice(0, 5)} ${line}`);
     if (logLines.length > 80) logLines = logLines.slice(-80);
     store.set(LKEY, logLines);
@@ -219,7 +234,7 @@
   setInterval(() => {
     if (!viewId || !jobs.has(viewId) || !started.has(viewId) || el.status.dataset.kind !== "live") return;
     const sec = Math.round((Date.now() - started.get(viewId)) / 1000);
-    el.status.textContent = el.status.textContent.replace(/ · 경과 .*$/, "") + " · 경과 " + (sec < 60 ? sec + "초" : Math.floor(sec / 60) + "분 " + (sec % 60) + "초");
+    el.status.textContent = el.status.textContent.replace(/ · (단계|경과) .*$/, "") + (stage.get(viewId) ? " · 단계 " + stage.get(viewId) : "") + " · 경과 " + (sec < 60 ? sec + "초" : Math.floor(sec / 60) + "분 " + (sec % 60) + "초");
   }, 1000);
   const started = new Map();   // 요약 시작 시각 (방금 시작한 작업을 사라진 것으로 오인하지 않게)
   const resumed = new Set();   // 자동 재시작은 영상마다 한 번만 (요청 낭비 방지)

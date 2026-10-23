@@ -211,6 +211,10 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
       <button class="btn" id="stop" type="button" hidden>멈춤</button>
     </div>
     <div id="status" role="status" aria-live="polite"></div>
+    <details id="timing" hidden>
+      <summary id="timingSum">⏱ 구간별 시간</summary>
+      <pre id="timingBody"></pre>
+    </details>
   </section>
 
   <div class="empty" id="empty">
@@ -253,6 +257,11 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
   </div>
 </nav>
 
+<style>
+#timing{margin:6px 0 0;font-size:13px;color:var(--muted)}
+#timing summary{cursor:pointer;padding:4px 0}
+#timing pre{white-space:pre-wrap;word-break:break-word;font:12px/1.6 var(--font-mono);margin:4px 0 0;padding:10px 12px;background:rgba(127,127,127,.1);border-radius:10px;user-select:text}
+</style>
 <dialog id="settings">
   <h2>설정 <small id="ver" style="font:500 12px var(--font-mono);color:var(--muted)"></small></h2>
   <form method="dialog">
