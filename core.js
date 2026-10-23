@@ -500,13 +500,16 @@
     const pre = t.firstText != null && t.headers != null ? t.firstText - t.headers : null;   // 첫 글자까지 (영상 처리 + 추론)
     const gen = t.end != null && t.firstText != null ? t.end - t.firstText : null;          // 글 생성
     const over = (t.wait || 0) + (t.failed || 0);                                          // 재시도·대기·실패한 시도
+    // 서버는 첫 글자가 준비된 뒤에야 응답 헤더를 보낸다 → 두 구간이 거의 같으면 하나로 본다
+    const merged = pre != null && pre < 1500;
+    const PRE = "첫 응답까지 (서버가 영상 읽기+추론)";
     const rows = [
       ["재시도·대기·실패한 시도", over],
       ["모델 목록 조회", t.list || 0],
-      ["서버 접속·응답 시작", t.headers],
-      ["첫 글자까지 (영상 처리+추론)", pre],
+      merged ? [PRE, t.firstText] : ["서버 접속·응답 시작", t.headers],
+      merged ? [PRE + " 중 글자 시작 이후", null] : ["첫 글자까지 (영상 처리+추론)", pre],
       ["글 생성", gen],
-    ];
+    ].filter((r) => !(merged && r[0].endsWith("이후")));
     const lines = [`총 ${sec1(t.total)} · ${t.model || ""} · 옵션 ${t.level == null ? "-" : t.level}${t.low ? "+저해상도" : ""} · 시도 ${t.tries}번`];
     for (const [k, v] of rows) lines.push(`${k}: ${sec1(v)} ${v ? pct(v, t.total) : ""}`.trim());
     lines.push(`제목 조회: ${sec1(t.meta)} (요약과 동시에 함)`);
@@ -520,6 +523,7 @@
         "재시도·대기·실패한 시도": "실패하고 다시 한 시간이 큽니다. 연결 끊김이나 서버 과부하일 수 있습니다. 진단 로그를 보세요.",
         "모델 목록 조회": "모델 목록을 가져오는 데 오래 걸렸습니다.",
         "서버 접속·응답 시작": "접속이나 응답 시작이 느립니다. 네트워크 상태일 수 있습니다.",
+        [PRE]: "영상을 읽고 추론하는 서버 처리가 깁니다(네트워크 아님). 입력 토큰이 크면 해상도 낮춤·프레임 줄이기, 추론 토큰이 크면 추론 줄이기, 또는 lite 모델을 시험해 보세요." + ((k.think || 0) > 1000 ? ` 추론 토큰 ${k.think}개가 쓰였습니다.` : ""),
         "첫 글자까지 (영상 처리+추론)": "영상 처리나 추론이 느립니다. 프레임 해상도 낮춤, lite 모델을 시험해 보세요." + ((k.think || 0) > 1000 ? ` 추론 토큰 ${k.think}개가 쓰였습니다.` : ""),
         "글 생성": "글을 쓰는 시간이 큽니다. 출력이 길거나 모델 속도가 느립니다. lite 모델이 더 빠를 수 있습니다.",
       }[big[0]];
@@ -743,7 +747,7 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-23.3";
+  const VERSION = "2026-10-23.4";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
     VERSION, fmtMs, timingReport,
