@@ -144,7 +144,7 @@
     C.idb.del("inbox", id).catch(() => {});
     if (viewId === id) {
       showEntry(entry, true);
-      setStatus("완료" + (entry.model ? " · " + entry.model : "") + " · 아래 버튼으로 복사하거나 들으세요." + jobsNote(), "ok");
+      setStatus("완료" + (entry.model ? " · " + entry.model : "") + (entry.ms ? " · " + C.fmtMs(entry.ms) : "") + " · 아래 버튼으로 복사하거나 들으세요." + jobsNote(), "ok");
     } else {
       toast(`요약 완료 · ${short(entry.title)}`);
       refreshBar();
@@ -180,6 +180,14 @@
         importInbox().then(() => { const h = history.find((x) => x.id === m.id); if (h) showEntry(h); });
       } else if (m.type === "status") {
         for (const r of m.running || []) jobs.set(r.id, { md: r.md, title: r.title });
+        // 서비스 워커가 백그라운드에서 꺼져 작업이 사라졌으면 한 번 자동으로 다시 시작한다
+        const alive = new Set((m.running || []).map((r) => r.id));
+        for (const id of [...jobs.keys()]) {
+          if (alive.has(id) || localCtrl || resumed.has(id) || Date.now() - (started.get(id) || 0) < 15000 || history.some((h) => h.id === id)) continue;
+          resumed.add(id); jobs.delete(id);
+          toast("백그라운드에서 요약이 끊겨 다시 시작합니다");
+          summarize(id, true);
+        }
         if (!viewId && m.running && m.running.length) {
           const r = m.running[m.running.length - 1];
           viewId = r.id;
@@ -191,6 +199,8 @@
     });
   }
 
+  const started = new Map();   // 요약 시작 시각 (방금 시작한 작업을 사라진 것으로 오인하지 않게)
+  const resumed = new Set();   // 자동 재시작은 영상마다 한 번만 (요청 낭비 방지)
   function showRetry(info) {
     const text = info.reason === "skip"
       ? `설정한 모델은 오늘 한도가 찼습니다. ${info.model}(으)로 요약합니다…`
@@ -198,6 +208,8 @@
       ? `이 모델을 지금 쓸 수 없어 다른 모델(${info.model})로 요약합니다…`
       : info.reason === "shrink"
       ? "영상이 길어 분당 토큰 한도를 넘었습니다. 빠른 요약(프레임 5초에 1장)으로 줄여서 다시 합니다…"
+      : info.reason === "network"
+      ? `연결이 끊겼습니다. ${Math.round(info.wait / 1000)}초 뒤 다시 시도합니다 (${info.attempt}/${info.of}). 앱을 화면에 두면 더 안정적입니다…`
       : info.reason === "rate"
       ? `분당 요청 한도에 걸렸습니다. ${Math.round(info.wait / 1000)}초 기다렸다 다시 합니다…`
       : `Google 서버가 바쁩니다. ${Math.round(info.wait / 1000)}초 뒤 다시 시도합니다 (${info.attempt}/2)…`;
@@ -234,6 +246,7 @@
     setStatus("영상 분석 중…" + jobsNote(), "live");
     const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, notify: !!settings.notify, skip: exhaustedNow() };
     jobs.set(id, { md: "", title: "" });
+    started.set(id, Date.now());
     refreshBar();
 
     const ctrl = swCtrl();
@@ -255,7 +268,7 @@
         onRetry: (info) => { if (viewId === id) showRetry(info); },
         onExhausted: markExhausted,
       }));
-      onDone(id, { id, title: res.meta.title || id, md: res.md, ts: Date.now(), model: res.model });
+      onDone(id, { id, title: res.meta.title || id, md: res.md, ts: Date.now(), model: res.model, ms: res.ms });
     } catch (e) {
       onError(id, C.friendly(e), e.name === "AbortError");
     } finally {

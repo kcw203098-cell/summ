@@ -210,6 +210,16 @@
     if (err.limit == null) { const lm = msg.match(/limit:\s*(\d+)/i); if (lm) err.limit = Number(lm[1]); }
     return err;
   }
+  // 연결 자체가 끊긴 오류 (HTTP 응답이 없다). 백그라운드에서 안드로이드가 연결을 끊을 때 생긴다
+  const isNetwork = (e) => e && e.name !== "AbortError" && !e.status &&
+    (e.name === "TypeError" || /failed to fetch|network|load failed|terminated|connection|socket/i.test(String(e.message)));
+  // 인터넷이 돌아올 때까지 기다린다 (최대 20초)
+  const whenOnline = (signal) => (typeof navigator === "undefined" || navigator.onLine !== false) ? Promise.resolve() :
+    new Promise((res) => {
+      const t = setTimeout(res, 20000);
+      self.addEventListener("online", () => { clearTimeout(t); res(); }, { once: true });
+      if (signal) signal.addEventListener("abort", res, { once: true });
+    });
   const isTokenMinute = (e) => (e && e.quotaIds || []).some((q) => /token/i.test(q) && /minute/i.test(q));
   const isQuota = (e) => e && (e.status === 429 || /quota|exhausted/i.test(String(e.message)));
   // 하루 한도인지 (분당 한도는 잠깐 기다리면 풀린다)
@@ -224,6 +234,7 @@
       return `분당 한도${e.limit ? " " + e.limit + "회" : ""} 초과`;
     }
     if (isOverloaded(e)) return "서버 과부하";
+    if (isNetwork(e)) return "연결이 끊김 (앱이 백그라운드에 있었을 수 있음)";
     if (isMissingModel(e)) return "이 키로 쓸 수 없는 모델";
     return String(e.message || e).slice(0, 60);
   }
@@ -234,8 +245,12 @@
     const level = fast === true ? 2 : +fast || 0;
     const video = { file_data: { file_uri: url } };
     const body = { contents: [{ role: "user", parts: [video, { text: PROMPT }] }] };
-    if (level >= 1) video.video_metadata = { fps: 0.2 };
-    if (level >= 2) body.generationConfig = { thinkingConfig: { thinkingLevel: "low" } };
+    if (level >= 1) {
+      video.video_metadata = { fps: 0.2 };
+      // 프레임당 토큰 258 → 66: 영상 입력이 크게 줄어 처리가 빨라진다 (소리는 그대로 32토큰/초)
+      body.generationConfig = { mediaResolution: "MEDIA_RESOLUTION_LOW" };
+    }
+    if (level >= 2) body.generationConfig.thinkingConfig = { thinkingLevel: "low" };
     return body;
   }
 
@@ -308,7 +323,10 @@
       if (isDailyQuota(e) && !skip.includes(mm)) { skip.push(mm); onExhausted && onExhausted(mm); }
     };
     const url = `https://www.youtube.com/watch?v=${id}`;
-    const meta = await fetchMeta(url);
+    const t0 = Date.now();
+    // 제목 조회는 요약과 동시에 한다 (기다리지 않는다)
+    let meta = {};
+    const metaP = fetchMeta(url).then((x) => { meta = x || {}; return meta; });
     const onText = (acc) => onProgress && onProgress({ meta, url, acc });
     onText("");
     let m = model || "gemini-flash-latest";
@@ -355,9 +373,20 @@
 
     let body, lastErr;
     const waits = [3000, 8000];            // 같은 모델로 재시도 전 대기 시간
+    const netWaits = [2000, 5000, 12000];  // 연결이 끊겼을 때 재시도 전 대기 시간
+    let netTry = 0;
     for (let attempt = 0; attempt <= waits.length; attempt++) {
       try { body = await withModelFix(); lastErr = null; break; }
       catch (e) {
+        if (isNetwork(e) && netTry < netWaits.length) {
+          const w = netWaits[netTry++];
+          onText("");
+          onRetry && onRetry({ reason: "network", wait: w, model: m, attempt: netTry, of: netWaits.length });
+          await sleep(w, signal);
+          await whenOnline(signal);
+          attempt--;                       // 과부하 재시도 횟수는 쓰지 않는다
+          continue;
+        }
         lastErr = e;
         markExhausted(m, e);
         if (attempt === waits.length) break;
@@ -399,7 +428,8 @@
     }
     if (lastErr) { lastErr.report = report; throw lastErr; }
     if (!String(body).trim()) throw new Error("빈 응답을 받았습니다. 다시 시도하세요.");
-    return { meta, url, body, model: m, md: buildMarkdown(meta, url, body, null, m) };
+    await Promise.race([metaP, sleep(2500)]);
+    return { meta, url, body, model: m, ms: Date.now() - t0, md: buildMarkdown(meta, url, body, null, m) };
   }
 
   // 하루 한도는 미국 태평양 시간 자정에 다시 채워진다 → 사용자의 현지 시각으로 바꿔 보여 준다
@@ -446,7 +476,7 @@
     if (isOverloaded(e))
       return "Google 서버에 요청이 몰려 있습니다. 자동으로 다시 시도하고 다른 모델로도 넘어갔지만 모두 바빴습니다. 1~2분 뒤 ‘요약’을 다시 누르세요.";
     if (low.includes("failed to fetch") || low.includes("network") || low.includes("load failed"))
-      return "네트워크에 연결할 수 없습니다. 인터넷 연결을 확인하세요.";
+      return "연결이 끊겨 요약하지 못했습니다. 자동으로 3번 다시 했지만 실패했습니다. Wi-Fi·데이터를 확인하고, 요약이 끝날 때까지 앱을 화면에 두면 더 안정적입니다. 안드로이드는 백그라운드 앱의 연결을 끊을 수 있습니다.";
     if (low.includes("private") || low.includes("unavailable"))
       return "이 영상을 읽을 수 없습니다. 비공개·연령 제한·지역 제한 영상은 처리되지 않습니다. (" + s.slice(0, 120) + ")";
     return "오류: " + s.slice(0, 300);
@@ -617,9 +647,10 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-22.4";
+  const VERSION = "2026-10-23.1";
+  const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
-    VERSION,
+    VERSION, fmtMs,
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
     fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, isTokenMinute, resetTime, resetAt, failReason, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
   };
