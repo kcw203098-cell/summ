@@ -2,7 +2,7 @@
 importScripts("core.js");
 const Core = self.Core;
 
-const CACHE = "ytnote-v25";
+const CACHE = "ytnote-v26";
 const SHELL = ["./", "index.html", "core.js", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -80,7 +80,7 @@ async function runJob(job) {
     if (!anyVisible(cs)) await notify(job, "요약 완료", entry.title, job.id);
   } catch (e) {
     const msg = Core.friendly(e);
-    const cs = await broadcast({ type: "error", id: job.id, message: msg, aborted: e.name === "AbortError" });
+    const cs = await broadcast({ type: "error", id: job.id, message: msg, aborted: e.name === "AbortError", att: e.att, pick: e.pick, totalMs: e.totalMs });
     if (e.name !== "AbortError" && !anyVisible(cs)) await notify(job, "요약 실패", msg.slice(0, 120), job.id);
   } finally {
     running.delete(job.id);

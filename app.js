@@ -107,6 +107,7 @@
   // ───────────── 기록 ─────────────
   function saveHistory(e) {
     recordPerf(e);
+    const rr = runFromEntry(e); if (rr && !e.recorded) { recordRun(Object.assign({ t: e.ts || Date.now() }, rr)); }
     history = [e].concat(history.filter((h) => h.id !== e.id)).slice(0, 40);
     store.set(HKEY, history);
     renderHistory();
@@ -198,7 +199,8 @@
     if (viewId === id) presentDone(entry, false);
     else { toast(`요약 완료 · ${short(entry.title)}`); refreshBar(); }
   }
-  function onError(id, message, aborted) {
+  function onError(id, message, aborted, extra) {
+    if (!aborted && extra && extra.att) recordRun({ ok: 0, tot: extra.totalMs, att: extra.att, pick: pickCompact(extra.pick), why: String(message).split("\n")[0].slice(0, 80) });
     jobs.delete(id);
     dropReq(id);
     if (viewId === id) {
@@ -221,7 +223,7 @@
           refreshBar();
         }
       } else if (m.type === "done") onDone(m.id, m.entry);
-      else if (m.type === "error") onError(m.id, m.message, m.aborted);
+      else if (m.type === "error") onError(m.id, m.message, m.aborted, { att: m.att, pick: m.pick, totalMs: m.totalMs });
       else if (m.type === "model") { settings.model = m.model; saveSettings(); }
       else if (m.type === "retry") { if (viewId === m.id) showRetry(m); }
       else if (m.type === "log") addLog(m.id, m.line);
@@ -267,6 +269,26 @@
     for (const x of p.tried || []) if (x.ms != null) g[x.model] = { ms: x.ms, ts: Date.now() };
     store.set(GKEY, g);
   }
+  // 성능 기록: 요약마다 구간 시간·시도·핑 결과를 한 줄로 남긴다 (제목·키·영상 주소는 넣지 않는다)
+  const RUNKEY = "ytnote.runs";
+  const pickCompact = (p) => (p ? { m: p.model, ms: p.ms, c: p.cached ? 1 : 0, t: (p.tried || []).map((x) => [x.model, x.ms != null ? x.ms : x.why]) } : null);
+  function recordRun(r) {
+    const a = store.get(RUNKEY, []);
+    a.push(Object.assign({ t: Date.now(), f: settings.fast ? 1 : 0, lo: settings.low ? 1 : 0, sp: settings.split ? 1 : 0, ap: settings.autoPick ? 1 : 0 }, r));
+    store.set(RUNKEY, a.slice(-200));
+  }
+  function runFromEntry(e) {
+    const t = e.timing; if (!t) return null;
+    const k = t.tok || {};
+    return t.split
+      ? { ok: 1, split: t.split, m: t.model, tot: t.total, bad: t.failed, segs: (t.segs || []).map((x) => x && [x.firstText, x.end, (x.tok || {}).in, x.tries]), pick: pickCompact(t.pick) }
+      : { ok: 1, m: t.model, lv: t.level, tot: t.total, pre: t.firstText, hdr: t.headers, end: t.end, in: k.in, th: k.think, out: k.out, chars: t.chars, tries: t.tries, fail: t.failed, wait: t.wait, att: t.att, pick: pickCompact(t.pick) };
+  }
+  function exportRuns(n) {
+    const a = store.get(RUNKEY, []).slice(-(n || 40));
+    const head = { app: C.VERSION, n: a.length, cfg: { model: settings.model, fast: settings.fast, low: settings.low, split: settings.split, autoPick: settings.autoPick }, ua: (navigator.userAgent.match(/Chrome\/[\d.]+/) || [""])[0], tz: new Date().getTimezoneOffset() };
+    return [JSON.stringify(head)].concat(a.map((r) => JSON.stringify(r))).join("\n");
+  }
   function recordPerf(e) {
     const t = e && e.timing;
     if (!t || t.split || !t.model || t.firstText == null) return;
@@ -309,6 +331,11 @@
     if (box && box.offsetParent) renderLog();
   }
   function renderLog() { const box = document.getElementById("dbg"); if (box) box.textContent = logLines.join("\n") || "(아직 없음)"; }
+  const rc = document.getElementById("runsCopy");
+  if (rc) rc.addEventListener("click", () => {
+    const txt = exportRuns(40);
+    try { navigator.clipboard.writeText(txt).then(() => toast("성능 기록 " + (txt.split("\n").length - 1) + "건을 복사했습니다"), () => toast("복사하지 못했습니다")); } catch { toast("복사하지 못했습니다"); }
+  });
   const dc = document.getElementById("dbgCopy");
   if (dc) dc.addEventListener("click", () => { try { navigator.clipboard.writeText(logLines.join("\n")); toast("로그를 복사했습니다"); } catch { toast("복사하지 못했습니다"); } });
   // 요약 중에는 경과 시간을 보여 준다 (멈췄는지 구분하려고)
@@ -452,7 +479,7 @@
       }));
       onDone(id, { id, title: res.meta.title || id, md: res.md, ts: Date.now(), model: res.model, ms: res.ms, timing: res.timing, partial: res.partial || 0 });
     } catch (e) {
-      onError(id, C.friendly(e), e.name === "AbortError");
+      onError(id, C.friendly(e), e.name === "AbortError", { att: e.att, pick: e.pick, totalMs: e.totalMs });
     } finally {
       localCtrl = null;
       refreshBar();

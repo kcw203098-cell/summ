@@ -487,7 +487,7 @@
       }
       if (lastErr) lastErr.triedCount = new Set(tried).size;
     }
-    if (lastErr) { lastErr.report = report; throw lastErr; }
+    if (lastErr) { lastErr.report = report; lastErr.att = compactAtt(stats.attempts); lastErr.totalMs = Date.now() - t0; throw lastErr; }
     if (!String(body).trim()) throw new Error("빈 응답을 받았습니다. 다시 시도하세요.");
     await Promise.race([metaP, sleep(2500)]);
     const timing = makeTiming(stats, Date.now() - t0, m);
@@ -635,7 +635,9 @@
       try { pick = await pickFastest(args); } catch (e) { if (e.name === "AbortError") throw e; }
       if (pick) { args = Object.assign({}, args, { model: pick.model }); args.onPick && args.onPick(pick); }
     }
-    const res = await runSplitInner(args);
+    let res;
+    try { res = await runSplitInner(args); }
+    catch (e) { if (e && typeof e === "object") e.pick = pick; throw e; }
     if (pick && res && res.timing) res.timing.pick = pick;
     return res;
   }
@@ -703,13 +705,15 @@
   }
 
   // ───────────── 구간별 시간 ─────────────
+  // 시도 기록을 짧게: [모델, 옵션, 성공?, 오류, 응답헤더ms, 첫글자ms, 끝ms]
+  const compactAtt = (a) => (a || []).map((x) => [x.model, x.level, x.failed ? 0 : 1, x.err || 0, x.headers == null ? null : x.headers, x.firstText == null ? null : x.firstText, x.end == null ? null : x.end]);
   // 마지막으로 성공한 시도를 기준으로 구간을 나눈다
   function makeTiming(stats, total, model) {
     const fin = [...stats.attempts].reverse().find((a) => !a.failed) || {};
     const failed = stats.attempts.filter((a) => a.failed).reduce((n, a) => n + (a.end || 0), 0);
     const u = fin.usage || {};
     return {
-      total, model, level: fin.level, low: fin.low, tries: stats.attempts.length,
+      total, model, level: fin.level, low: fin.low, tries: stats.attempts.length, att: compactAtt(stats.attempts),
       meta: stats.metaMs, list: stats.listMs, wait: stats.waitMs, failed,
       headers: fin.headers, firstText: fin.firstText, end: fin.end, chars: fin.chars,
       tok: { in: u.promptTokenCount, think: u.thoughtsTokenCount, out: u.candidatesTokenCount },
@@ -1003,7 +1007,7 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-24.4";
+  const VERSION = "2026-10-24.5";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
     VERSION, fmtMs, timingReport, pickFastest, PING_TTL, runSplit, planSegments, segmentPrompt, fmtClock,
