@@ -525,12 +525,42 @@
   }
 
   // 반환: { model, ms, tried: [{model, ms|why}], cached, total } 또는 null (전부 실패·시간 초과)
+  // 모델별 실제 "첫 글자까지" 시간 기록으로 속도를 예측한다. 핑은 실제 속도와 달랐다(핑 1.6초 모델이 실제로는 37~150초).
+  // 최근 24시간, 최근 5개의 중앙값 (이상치 한 번에 흔들리지 않게)
+  const LAT_WINDOW = 24 * 3600 * 1000, LAT_N = 5, EXPLORE_MS = 20000;
+  function latScore(samples, now) {
+    now = now || Date.now();
+    const v = (samples || []).filter((x) => x && now - x.ts < LAT_WINDOW).slice(-LAT_N).map((x) => x.ms).sort((a, b) => a - b);
+    if (!v.length) return null;
+    const m = v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
+    return { ms: m, n: v.length };
+  }
+  async function pickByHistory(args, log) {
+    const lat = args.lat || {};
+    const skip = args.skip || [], busy = args.busy || [];
+    const live = (x) => !skip.includes(x) && !busy.includes(x);
+    const known = Object.keys(lat).map((k) => ({ model: k, s: latScore(lat[k]) })).filter((o) => o.s && live(o.model)).sort((a, b) => a.s.ms - b.s.ms);
+    if (!known.length) return null;
+    const best = known[0];
+    if (best.s.ms > EXPLORE_MS) {
+      // 기록된 모델이 모두 느리다 → 기록 없는 모델을 한 번 시험해 본다
+      try {
+        const models = await listModels(args.apiKey);
+        const unk = altFlashModels(models, skip).filter((x) => live(x) && !latScore(lat[x]));
+        if (unk.length) { log(`기록상 가장 빠른 ${best.model}도 ${(best.s.ms / 1000).toFixed(0)}초 → 기록 없는 ${unk[0]} 시험`); return { model: unk[0], ms: null, tried: [], explore: true, score: best.s.ms, total: 0 }; }
+      } catch (e) { if (e.name === "AbortError") throw e; }
+    }
+    log(`기록으로 선택 · ${best.model} (최근 ${best.s.n}회 중앙값 ${(best.s.ms / 1000).toFixed(1)}초)`);
+    return { model: best.model, ms: null, tried: [], hist: true, score: best.s.ms, n: best.s.n, total: 0 };
+  }
   async function pickFastest(args) {
     const { apiKey, model, signal, onLog, onExhausted, onBusy, pickCache } = args;
     const skip = args.skip || [], busy = args.busy || [], good = args.good || [];
     const log = (x) => onLog && onLog(x);
     const timeoutMs = args.pingTimeoutMs || 12000;
     const t0 = Date.now();
+    const byHist = await pickByHistory(args, log);
+    if (byHist) return byHist;
     if (pickCache && pickCache.model && Date.now() - pickCache.ts < PING_TTL && !skip.includes(pickCache.model) && !busy.includes(pickCache.model)) {
       log(`핑 건너뜀 · ${Math.round((Date.now() - pickCache.ts) / 60000)}분 전 결과 사용 (${pickCache.model})`);
       return { model: pickCache.model, ms: pickCache.ms, tried: [], cached: true, total: 0 };
@@ -745,6 +775,8 @@
   }
   function pickLine(p) {
     if (!p) return null;
+    if (p.hist) return `속도 기록으로 선택: ${p.model} (최근 ${p.n}회 중앙값 ${sec1(p.score)})`;
+    if (p.explore) return `속도 기록이 느려서(최고 ${sec1(p.score)}) 기록 없는 모델 시험: ${p.model}`;
     if (p.cached) return `속도 측정(핑): 20분 이내 결과 재사용 → ${p.model}`;
     return `속도 측정(핑) ${sec1(p.total)}: ` + (p.tried || []).map((x) => `${x.model} ${x.ms != null ? sec1(x.ms) : x.why}`).join(" · ") + ` → ${p.model} 선택`;
   }
@@ -1007,10 +1039,10 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-24.13";
+  const VERSION = "2026-10-24.14";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
-    VERSION, fmtMs, timingReport, pickFastest, PING_TTL, runSplit, planSegments, segmentPrompt, fmtClock,
+    VERSION, fmtMs, timingReport, pickFastest, PING_TTL, runSplit, latScore, planSegments, segmentPrompt, fmtClock,
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
     fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, isTokenMinute, resetTime, resetAt, failReason, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
   };

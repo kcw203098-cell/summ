@@ -224,6 +224,7 @@
     else { toast(`요약 완료 · ${short(entry.title)}`); refreshBar(); }
   }
   function onError(id, message, aborted, extra) {
+    if (!aborted && extra && extra.att) recordLatAtt(extra.att);
     if (!aborted && extra && extra.att) recordRun({ ok: 0, tot: extra.totalMs, att: extra.att, pick: pickCompact(extra.pick), why: String(message).split("\n")[0].slice(0, 80) });
     jobs.delete(id);
     dropReq(id);
@@ -281,13 +282,26 @@
   }
 
   // 모델 상태: 최근 과부하(10분) · 최근 성공 기록(속도)
-  const BKEY = "ytnote.busy", PKEY = "ytnote.perf", KKEY = "ytnote.pick", GKEY = "ytnote.ping";
+  const BKEY = "ytnote.busy", PKEY = "ytnote.perf", KKEY = "ytnote.pick", GKEY = "ytnote.ping", LATKEY = "ytnote.lat";
   const busyNow = () => { const o = store.get(BKEY, {}), now = Date.now(); return Object.keys(o).filter((k) => o[k] > now); };
   function markBusy(model) { const o = store.get(BKEY, {}); o[model] = Date.now() + 10 * 60 * 1000; store.set(BKEY, o); }
-  const goodModels = () => { const o = store.get(PKEY, {}), lim = Date.now() - 6 * 3600 * 1000; return Object.keys(o).filter((k) => o[k].ts > lim).sort((a, b) => (o[a].preMs - o[b].preMs) || (o[b].ts - o[a].ts)); };
+  // 모델별 실제 속도 기록 (첫 글자까지 걸린 시간, 최근 5개). 성공한 요약과 503으로 낭비한 시간을 함께 쓴다
+  const latNow = () => { const o = store.get(LATKEY, {}), lim = Date.now() - 24 * 3600 * 1000, out = {}; for (const k in o) { const a = (o[k] || []).filter((x) => x.ts > lim); if (a.length) out[k] = a; } return out; };
+  function recordLatAtt(att, ts) {
+    if (!Array.isArray(att)) return;
+    const o = store.get(LATKEY, {}), now = ts || Date.now(), lim = now - 24 * 3600 * 1000;
+    for (const a of att) {
+      const m = a[0], ok = a[2], err = a[3], ft = a[5], end = a[6];
+      const ms = ok && ft != null ? ft : (!ok && err === 503 && end != null ? end : null);   // 429는 속도와 무관하니 넣지 않는다
+      if (ms == null) continue;
+      o[m] = (o[m] || []).filter((x) => x.ts > lim).concat([{ ts: now, ms, f: ok ? 0 : 1 }]).slice(-5);
+    }
+    store.set(LATKEY, o);
+  }
+  const goodModels = () => { const l = latNow(), sc = (k) => { const r = C.latScore(l[k]); return r ? r.ms : 1e9; }; return Object.keys(l).filter((k) => C.latScore(l[k])).sort((a, b) => sc(a) - sc(b)); };
   // 핑 결과: 선택한 모델은 20분 동안 재사용하고, 모델별 핑 시간은 설정 화면에 보여 준다
   function recordPick(p) {
-    if (!p || p.cached) return;
+    if (!p || p.cached || p.hist || p.explore) return;
     store.set(KKEY, { model: p.model, ms: p.ms, ts: Date.now() });
     const g = store.get(GKEY, {});
     for (const x of p.tried || []) if (x.ms != null) g[x.model] = { ms: x.ms, ts: Date.now() };
@@ -314,6 +328,7 @@
     return [JSON.stringify(head)].concat(a.map((r) => JSON.stringify(r))).join("\n");
   }
   function recordPerf(e) {
+    if (e && e.timing && !e.timing.split) recordLatAtt(e.timing.att, e.ts);
     const t = e && e.timing;
     if (!t || t.split || !t.model || t.firstText == null) return;
     const o = store.get(PKEY, {});
@@ -322,11 +337,11 @@
   }
   function renderPerf() {
     const box = document.getElementById("perf"); if (!box) return;
-    const o = store.get(PKEY, {}), keys = Object.keys(o).sort((a, b) => o[b].ts - o[a].ts).slice(0, 8);
+    const lt = latNow(), keys = Object.keys(lt).sort((a, b) => lt[b][lt[b].length - 1].ts - lt[a][lt[a].length - 1].ts).slice(0, 8);
     const g = store.get(GKEY, {});
     const lines = keys.map((k) => {
-      const v = o[k];
-      return `${k}: 첫 응답 ${(v.preMs / 1000).toFixed(0)}초 · 입력 ${v.inTok}토큰 · 추론 ${v.thinkTok == null ? "-" : v.thinkTok}토큰 (${Math.round((Date.now() - v.ts) / 60000)}분 전)`;
+      const sc = C.latScore(lt[k]);
+      return `${k}: 첫 응답 중앙값 ${(sc.ms / 1000).toFixed(0)}초 (최근 ${sc.n}회: ${lt[k].map((x) => (x.f ? "✕" : "") + Math.round(x.ms / 1000)).join(", ")}초)`;
     });
     const pk = Object.keys(g).sort((a, b) => g[b].ts - g[a].ts).slice(0, 8).map((k) => `핑 ${k}: ${(g[k].ms / 1000).toFixed(1)}초 (${Math.round((Date.now() - g[k].ts) / 60000)}분 전)`);
     box.textContent = lines.concat(pk).join("\n") || "(아직 없음)";
@@ -469,7 +484,7 @@
       showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
       setStatus("영상 분석 중…" + jobsNote(), "live");
     }
-    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, split: !!settings.split, autoPick: !!settings.autoPick, pickCache: store.get(KKEY, null), duration: 0, notify: !!settings.notify, skip: exhaustedNow(), busy: busyNow(), good: goodModels() };
+    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, split: !!settings.split, autoPick: !!settings.autoPick, pickCache: store.get(KKEY, null), duration: 0, notify: !!settings.notify, skip: exhaustedNow(), busy: busyNow(), good: goodModels(), lat: latNow() };
     jobs.set(id, { md: "", title: "" });
     started.set(id, Date.now());
     refreshBar();
