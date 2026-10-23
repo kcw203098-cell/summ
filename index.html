@@ -208,6 +208,28 @@ dialog input[type="text"], dialog input[type="password"], dialog select {
 dialog .check { display: flex; gap: 10px; align-items: flex-start; font-weight: 400; }
 dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: var(--accent); }
 
+
+dialog form { gap: 12px; }
+.grp { border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; display: grid; gap: 12px; margin: 0; min-width: 0; }
+.grp > h3, .grp > summary { font: 700 12px var(--font-mono); letter-spacing: .06em; color: var(--muted); margin: 0; }
+details.grp { display: block; }
+details.grp > summary { cursor: pointer; }
+.diagbody { display: grid; gap: 10px; margin-top: 12px; }
+.diagbody small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.diagbody summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.diagbody pre { white-space: pre-wrap; word-break: break-all; font: 12px/1.6 var(--font-mono); margin: 8px 0; user-select: text; }
+#dbg { max-height: 34vh; overflow: auto; }
+.keyrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; font: 500 14px var(--font-mono); }
+button.btn.sm { height: 36px; padding: 0 14px; font-size: 13px; }
+button.btn.danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, var(--line)); }
+#settings h2:focus { outline: none; }
+.sfoot { position: sticky; bottom: -20px; margin: 0 -20px -20px; padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0px)); background: var(--surface); border-top: 1px solid var(--line); flex-wrap: nowrap; }
+.sfoot .btn { flex: 1; }
+dialog label small { display: block; }
+dialog .check > span { min-width: 0; line-height: 1.5; }
+dialog .check small { display: block; margin-top: 2px; }
+dialog .check > input { flex: none; }
+
 #toast {
   position: fixed; left: 50%; transform: translateX(-50%); z-index: 20;
   bottom: calc(var(--dock, 150px) + 10px);
@@ -283,69 +305,107 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
 #timing pre{white-space:pre-wrap;word-break:break-word;font:12px/1.6 var(--font-mono);margin:4px 0 0;padding:10px 12px;background:rgba(127,127,127,.1);border-radius:10px;user-select:text}
 </style>
 <dialog id="settings">
-  <h2>설정 <small id="ver" style="font:500 12px var(--font-mono);color:var(--muted)"></small></h2>
+  <h2 tabindex="-1" autofocus>설정 <small id="ver" style="font:500 12px var(--font-mono);color:var(--muted)"></small></h2>
   <form method="dialog">
-    <label for="sKey">Gemini API 키
-      <input id="sKey" type="password" autocomplete="off" placeholder="AIza…">
-      <small>aistudio.google.com/apikey 에서 발급합니다. 키는 이 휴대폰에만 저장됩니다.</small>
-    </label>
-    <label for="sModel">모델
-      <input id="sModel" type="text" autocomplete="off" placeholder="gemini-flash-latest" list="modelList">
-      <datalist id="modelList">
-        <option value="gemini-3.1-flash-lite">Flash-Lite · 저렴, 한도 여유</option>
-        <option value="gemini-flash-latest">최신 Flash · 품질 우선</option>
-        <option value="gemini-3.8-flash">3.8 Flash</option>
-      </datalist>
-      <small>틀린 이름이면 사용 가능한 flash 모델로 자동으로 바꿉니다.</small>
-    </label>
-    <label for="sTheme">화면 색상
-      <select id="sTheme"><option value="auto">기기 설정 따라가기</option><option value="light">라이트</option><option value="dark">다크</option></select>
-    </label>
-    <label for="sSize">글자 크기
-      <select id="sSize"><option value="s">작게</option><option value="m">보통</option><option value="l">크게</option><option value="xl">아주 크게</option></select>
-    </label>
-    <label class="check" for="sPick"><input id="sPick" type="checkbox"> 요약 전 가장 빠른 모델 자동 선택 (후보 3개에 짧은 영상으로 핑을 보내 먼저 답한 모델을 씁니다. 결과는 20분 동안 재사용합니다. 후보 모델마다 요청 1개씩 씁니다. 켜면 위의 모델 설정은 후보 중 하나가 됩니다)</label>
-    <label class="check" for="sSplit"><input id="sSplit" type="checkbox"> 긴 영상 분할 요약 (12분 넘는 영상을 최대 4구간으로 나눠 동시에 요약. 빠르지만 요청이 구간 수만큼 늘어 하루 한도를 더 씁니다)</label>
-    <label class="check" for="sLow"><input id="sLow" type="checkbox"> 프레임 해상도 낮춤 (실험. 빠른 요약이 켜져 있을 때만 적용. 켠 뒤 요약이 멈추면 끄세요)</label>
-    <label class="check" for="sFast"><input id="sFast" type="checkbox"> 빠른 요약 (영상 프레임을 5초에 1장만 보고, 추론을 줄입니다. 말 위주 영상은 품질 차이가 작습니다)</label>
-    <label class="check" for="sAuto"><input id="sAuto" type="checkbox"> 앱으로 돌아올 때 클립보드의 YouTube 주소를 자동으로 요약</label>
-    <label class="check" for="sNotify"><input id="sNotify" type="checkbox"> 앱 밖에 있을 때 요약이 끝나면 알림</label>
-    <label for="sVoice">읽어 주기 목소리
-      <select id="sVoice">
-        <option value="Kore">Kore · 단단한</option>
-        <option value="Charon">Charon · 차분한 설명조</option>
-        <option value="Aoede">Aoede · 가벼운</option>
-        <option value="Puck">Puck · 밝은</option>
-        <option value="Zephyr">Zephyr · 또렷한</option>
-        <option value="Fenrir">Fenrir · 힘찬</option>
-      </select>
-    </label>
-    <label for="sTts">음성 모델
-      <input id="sTts" type="text" autocomplete="off" placeholder="gemini-3.8-flash-tts">
-      <small>틀린 이름이면 사용 가능한 TTS 모델로 자동으로 바꿉니다. 만든 음성은 최근 6개 요약까지 저장해 다시 들을 때 사용량을 쓰지 않습니다.</small>
-    </label>
-    <label for="sVault">옵시디언 보관함 이름
-      <input id="sVault" type="text" autocomplete="off" placeholder="비우면 마지막으로 연 보관함">
-    </label>
-    <label for="sFolder">옵시디언 폴더
-      <input id="sFolder" type="text" autocomplete="off" placeholder="YouTube 요약">
-    </label>
-    <div class="row">
+    <section class="grp">
+      <h3>요약</h3>
+      <label class="check" for="sPick"><input id="sPick" type="checkbox"><span>가장 빠른 모델 자동 선택<small>모델별 실제 속도 기록으로 고릅니다. 기록이 없을 때만 짧은 영상으로 핑을 보냅니다.</small></span></label>
+      <label class="check" for="sFast"><input id="sFast" type="checkbox"><span>빠른 요약<small>프레임을 5초에 1장만 보고 추론을 줄입니다. 말 위주 영상은 품질 차이가 작습니다.</small></span></label>
+      <label class="check" for="sLow"><input id="sLow" type="checkbox"><span>프레임 해상도 낮춤<small>실험 기능입니다. 켠 뒤 요약이 멈추면 끄세요.</small></span></label>
+      <label class="check" for="sSplit"><input id="sSplit" type="checkbox"><span>긴 영상 분할 요약<small>12분 넘는 영상을 최대 4구간으로 나눠 동시에 요약합니다. 요청이 늘어 하루 한도를 더 씁니다.</small></span></label>
+      <label for="sModel">기본 모델
+        <input id="sModel" type="text" autocomplete="off" placeholder="gemini-flash-latest" list="modelList">
+        <datalist id="modelList">
+          <option value="gemini-3.1-flash-lite">Flash-Lite · 저렴, 한도 여유</option>
+          <option value="gemini-flash-latest">최신 Flash · 품질 우선</option>
+          <option value="gemini-3.8-flash">3.8 Flash</option>
+        </datalist>
+        <small>자동 선택을 켜면 후보 중 하나로만 쓰입니다. 틀린 이름이면 사용 가능한 flash 모델로 바꿉니다.</small>
+      </label>
+    </section>
+
+    <section class="grp">
+      <h3>화면</h3>
+      <label for="sTheme">색상
+        <select id="sTheme"><option value="auto">기기 설정 따라가기</option><option value="light">라이트</option><option value="dark">다크</option></select>
+      </label>
+      <label for="sSize">글자 크기
+        <select id="sSize"><option value="s">작게</option><option value="m">보통</option><option value="l">크게</option><option value="xl">아주 크게</option></select>
+      </label>
+    </section>
+
+    <section class="grp">
+      <h3>자동화</h3>
+      <label class="check" for="sAuto"><input id="sAuto" type="checkbox"> 앱으로 돌아올 때 클립보드의 YouTube 주소를 자동 요약</label>
+      <label class="check" for="sNotify"><input id="sNotify" type="checkbox"> 앱 밖에 있을 때 요약이 끝나면 알림</label>
+    </section>
+
+    <section class="grp">
+      <h3>읽어 주기</h3>
+      <label for="sVoice">목소리
+        <select id="sVoice">
+          <option value="Kore">Kore · 단단한</option>
+          <option value="Charon">Charon · 차분한 설명조</option>
+          <option value="Aoede">Aoede · 가벼운</option>
+          <option value="Puck">Puck · 밝은</option>
+          <option value="Zephyr">Zephyr · 또렷한</option>
+          <option value="Fenrir">Fenrir · 힘찬</option>
+        </select>
+      </label>
+      <label for="sTts">음성 모델
+        <input id="sTts" type="text" autocomplete="off" placeholder="gemini-3.8-flash-tts">
+        <small>틀린 이름이면 사용 가능한 TTS 모델로 바꿉니다. 만든 음성은 최근 6개 요약까지 저장해 다시 들을 때 사용량을 쓰지 않습니다.</small>
+      </label>
+    </section>
+
+    <section class="grp">
+      <h3>옵시디언</h3>
+      <label for="sVault">보관함 이름
+        <input id="sVault" type="text" autocomplete="off" placeholder="비우면 마지막으로 연 보관함">
+      </label>
+      <label for="sFolder">폴더
+        <input id="sFolder" type="text" autocomplete="off" placeholder="YouTube 요약">
+        <small>노트 제목은 "날짜 시각 영상제목" 형식으로 저장됩니다.</small>
+      </label>
+    </section>
+
+    <section class="grp">
+      <h3>Gemini API 키</h3>
+      <div class="keyrow" id="keyState">
+        <span id="keyMask">저장된 키 없음</span>
+        <button type="button" class="btn sm" id="keyChange">변경</button>
+      </div>
+      <div id="keyEdit" hidden>
+        <label for="sKey">새 키 붙여넣기
+          <input id="sKey" type="password" autocomplete="off" placeholder="AIza…">
+          <small>비워 두고 저장하면 기존 키를 그대로 씁니다. aistudio.google.com/apikey 에서 발급하며, 키는 이 휴대폰에만 저장됩니다.</small>
+        </label>
+        <button type="button" class="btn sm danger" id="keyDel" hidden>저장된 키 삭제</button>
+      </div>
+    </section>
+
+    <details class="grp diag">
+      <summary>진단·기록</summary>
+      <div class="diagbody">
+        <button type="button" id="runsCopy" class="btn">성능 기록 복사 (최근 40건)</button>
+        <small>요약마다 구간 시간·시도·핑 결과를 한 줄로 남깁니다. 제목·API 키·영상 주소는 들어 있지 않습니다.</small>
+        <details id="perfBox">
+          <summary>모델별 최근 속도 (첫 응답까지)</summary>
+          <pre id="perf"></pre>
+        </details>
+        <details id="dbgBox">
+          <summary>진단 로그 (요약이 안 될 때 확인)</summary>
+          <pre id="dbg"></pre>
+          <button type="button" id="dbgCopy" class="btn">로그 복사</button>
+        </details>
+      </div>
+    </details>
+
+    <div class="row sfoot">
       <button class="btn" id="sClose" type="button">닫기</button>
       <button class="btn primary" id="sSave" type="submit">저장</button>
     </div>
   </form>
-  <div style="margin-top:12px"><button type="button" id="runsCopy" class="btn">성능 기록 복사 (최근 40건)</button>
-    <small style="display:block;color:var(--muted);margin-top:4px">요약마다 구간 시간·시도·핑 결과를 한 줄로 남깁니다. 제목·API 키·영상 주소는 들어 있지 않습니다.</small></div>
-  <details id="perfBox" style="margin-top:12px">
-    <summary style="cursor:pointer;font-size:13px;color:var(--muted)">모델별 최근 속도 (첫 응답까지)</summary>
-    <pre id="perf" style="white-space:pre-wrap;word-break:break-all;font:12px/1.6 var(--font-mono);margin:8px 0;user-select:text"></pre>
-  </details>
-  <details id="dbgBox" style="margin-top:12px">
-    <summary style="cursor:pointer;font-size:13px;color:var(--muted)">진단 로그 (요약이 안 될 때 확인)</summary>
-    <pre id="dbg" style="white-space:pre-wrap;word-break:break-all;font:12px/1.5 var(--font-mono);max-height:34vh;overflow:auto;user-select:text;margin:8px 0"></pre>
-    <button type="button" id="dbgCopy" class="btn">로그 복사</button>
-  </details>
 </dialog>
 
 <div id="toast" role="status" hidden></div>

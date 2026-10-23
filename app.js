@@ -43,7 +43,7 @@
     rate: $("#ttsRate"), prev: $("#ttsPrev"), next: $("#ttsNext"),
     hist: $("#hist"), histCount: $("#histCount"), histCnt2: $("#histCnt2"), histDlg: $("#histDlg"), histClose: $("#histClose"), openHist: $("#openHist"), acts: $("#acts"), pl2: $("#pl2"),
     dlg: $("#settings"), openSet: $("#openSet"),
-    sKey: $("#sKey"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sSplit: $("#sSplit"), sPick: $("#sPick"), sTheme: $("#sTheme"), sSize: $("#sSize"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
+    sKey: $("#sKey"), keyMask: $("#keyMask"), keyChange: $("#keyChange"), keyEdit: $("#keyEdit"), keyDel: $("#keyDel"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sSplit: $("#sSplit"), sPick: $("#sPick"), sTheme: $("#sTheme"), sSize: $("#sSize"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
     sVoice: $("#sVoice"), sTts: $("#sTts"), sVault: $("#sVault"), sFolder: $("#sFolder"),
     sSave: $("#sSave"), sClose: $("#sClose"), toast: $("#toast"),
   };
@@ -937,7 +937,13 @@
   applySize(settings.size);
   function openSettings() {
     const v = document.getElementById("ver"); if (v) v.textContent = "버전 " + C.VERSION;
-    el.sKey.value = settings.apiKey;
+    // 키는 입력칸에 미리 채우지 않는다: 실수로 지우거나 화면에 드러나는 일을 막는다
+    el.sKey.value = "";
+    const has = !!settings.apiKey;
+    el.keyMask.textContent = has ? "저장됨 · ••••" + settings.apiKey.slice(-4) : "저장된 키 없음";
+    el.keyChange.hidden = !has;
+    el.keyEdit.hidden = has;
+    el.keyDel.hidden = !has;
     el.sModel.value = settings.model;
     el.sFast.checked = !!settings.fast;
     el.sLow.checked = !!settings.low;
@@ -953,7 +959,16 @@
     el.sVault.value = settings.vault;
     el.sFolder.value = settings.folder;
     if (el.dlg.showModal) el.dlg.showModal(); else el.dlg.setAttribute("open", "");
+    el.dlg.scrollTop = 0;
+    const h = el.dlg.querySelector("h2"); if (h) h.focus();   // 키보드가 저절로 올라오지 않게
   }
+  el.keyChange.addEventListener("click", () => { el.keyEdit.hidden = false; el.keyChange.hidden = true; el.sKey.focus(); });
+  el.keyDel.addEventListener("click", () => {
+    if (!confirm("저장된 API 키를 삭제할까요? 삭제하면 새 키를 넣기 전에는 요약할 수 없습니다.")) return;
+    settings = Object.assign({}, settings, { apiKey: "" }); saveSettings();
+    el.keyMask.textContent = "저장된 키 없음"; el.keyDel.hidden = true; el.keyChange.hidden = true; el.keyEdit.hidden = false;
+    toast("API 키를 삭제했습니다");
+  });
   el.openSet.addEventListener("click", openSettings);
   el.openHist.addEventListener("click", () => { if (el.histDlg.showModal) el.histDlg.showModal(); else el.histDlg.setAttribute("open", ""); });
   el.histClose.addEventListener("click", () => el.histDlg.close());
@@ -964,7 +979,7 @@
   el.sSave.addEventListener("click", (e) => {
     e.preventDefault();
     settings = Object.assign({}, settings, {
-      apiKey: el.sKey.value.trim(),
+      apiKey: el.sKey.value.trim() || settings.apiKey,
       model: el.sModel.value.trim() || DEFAULTS.model,
       fast: el.sFast.checked,
       low: el.sLow.checked,
