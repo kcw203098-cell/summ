@@ -41,7 +41,7 @@
     bar: $("#bar"), cpMd: $("#cpMd"), cpTxt: $("#cpTxt"), share: $("#share"), obs: $("#obs"),
     play: $("#ttsPlay"), playIcon: $("#ttsIcon"), playLabel: $("#ttsLabel"), prog: $("#ttsProg"),
     rate: $("#ttsRate"), prev: $("#ttsPrev"), next: $("#ttsNext"),
-    hist: $("#hist"), histCount: $("#histCount"),
+    hist: $("#hist"), histCount: $("#histCount"), histCnt2: $("#histCnt2"), histDlg: $("#histDlg"), histClose: $("#histClose"), openHist: $("#openHist"), acts: $("#acts"), pl2: $("#pl2"),
     dlg: $("#settings"), openSet: $("#openSet"),
     sKey: $("#sKey"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sSplit: $("#sSplit"), sPick: $("#sPick"), sTheme: $("#sTheme"), sSize: $("#sSize"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
     sVoice: $("#sVoice"), sTts: $("#sTts"), sVault: $("#sVault"), sFolder: $("#sFolder"),
@@ -63,9 +63,9 @@
   function refreshBar() {
     const done = !!current && current.id === viewId;
     [el.cpMd, el.cpTxt, el.share, el.obs].forEach((b) => (b.disabled = !done));
-    el.bar.hidden = !(done || player.entry);
+    el.bar.hidden = false;
+    el.acts.hidden = !(done || player.entry);
     el.stop.hidden = !jobs.has(viewId);
-    el.paste.hidden = !el.stop.hidden;
     updatePlayerUI();
   }
   const short = (t) => (t && t.length > 26 ? t.slice(0, 26) + "…" : t || "");
@@ -137,7 +137,7 @@
     renderHistory();
   }
   function renderHistory() {
-    el.histCount.textContent = history.length;
+    el.histCount.textContent = history.length; el.histCnt2.textContent = history.length;
     el.hist.innerHTML = "";
     // 날짜별 번호: 그날 먼저 요약한 것이 1번 (목록은 최신순이라 위쪽 번호가 더 크다)
     const dayOf = (h) => new Date(h.ts).toLocaleDateString("ko-KR");
@@ -151,7 +151,7 @@
       b.querySelector(".hn").textContent = nums.get(h.id) + ".";
       b.querySelector(".ht").textContent = h.title;
       b.querySelector(".hd").textContent = new Date(h.ts).toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
-      b.addEventListener("click", () => { stopFollow(); showEntry(h); window.scrollTo({ top: 0, behavior: "smooth" }); });
+      b.addEventListener("click", () => { if (el.histDlg.open) el.histDlg.close(); stopFollow(); showEntry(h); window.scrollTo({ top: 0, behavior: "smooth" }); });
       li.appendChild(b);
       el.hist.appendChild(li);
     }
@@ -721,6 +721,7 @@
     el.play.disabled = !active && !current;
     el.playLabel.textContent = on ? "일시정지" : active && player.i > 0 && (sameAsView || !current) ? "이어 듣기" : "듣기";
     el.prev.hidden = el.next.hidden = !active;
+    el.pl2.hidden = !active;
     el.rate.textContent = `${settings.rate}×`;
     let p = "";
     if (active) {
@@ -939,6 +940,11 @@
     if (el.dlg.showModal) el.dlg.showModal(); else el.dlg.setAttribute("open", "");
   }
   el.openSet.addEventListener("click", openSettings);
+  el.openHist.addEventListener("click", () => { if (el.histDlg.showModal) el.histDlg.showModal(); else el.histDlg.setAttribute("open", ""); });
+  el.histClose.addEventListener("click", () => el.histDlg.close());
+  el.histDlg.addEventListener("click", (ev) => { if (ev.target === el.histDlg) el.histDlg.close(); });
+  // 아래 도구줄 높이에 맞춰 본문 아래 여백을 정한다
+  try { new ResizeObserver(() => document.documentElement.style.setProperty("--dock", el.bar.offsetHeight + "px")).observe(el.bar); } catch {}
   el.sClose.addEventListener("click", () => el.dlg.close());
   el.sSave.addEventListener("click", (e) => {
     e.preventDefault();
