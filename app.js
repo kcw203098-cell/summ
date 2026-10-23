@@ -773,7 +773,9 @@
     if (!current) return;
     await copyText(current.md, "마크다운");
     const folder = (settings.folder || "").trim().replace(/^\/+|\/+$/g, "");
-    const name = C.safeName(current.title);
+    const d = new Date(current.ts || Date.now()), z = (n) => String(n).padStart(2, "0");
+    const stamp = `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}${z(d.getMinutes())}`;
+    const name = C.safeName(`${stamp} ${current.title}`);
     const q = [];
     if (settings.vault) q.push("vault=" + encodeURIComponent(settings.vault));
     q.push(folder ? "file=" + encodeURIComponent(folder + "/" + name) : "name=" + encodeURIComponent(name));
