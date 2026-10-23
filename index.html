@@ -161,7 +161,8 @@ details.hist summary { cursor: pointer; font: 600 14px var(--font-display); colo
   background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
   color: var(--ink); font: 14px var(--font-body); cursor: pointer;
 }
-#hist .ht { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#hist .ht { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#hist .hn { flex: none; min-width: 2.2ch; font: 600 12px var(--font-mono); color: var(--accent, var(--muted)); text-align: right; }
 #hist .hd { flex: none; font: 12px var(--font-mono); color: var(--muted); }
 
 dialog {

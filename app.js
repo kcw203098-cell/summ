@@ -113,11 +113,16 @@
   function renderHistory() {
     el.histCount.textContent = history.length;
     el.hist.innerHTML = "";
+    // 날짜별 번호: 그날 먼저 요약한 것이 1번 (목록은 최신순이라 위쪽 번호가 더 크다)
+    const dayOf = (h) => new Date(h.ts).toLocaleDateString("ko-KR");
+    const nums = new Map(), seen = {};
+    [...history].sort((a, b) => a.ts - b.ts).forEach((h) => { const d = dayOf(h); seen[d] = (seen[d] || 0) + 1; nums.set(h.id, seen[d]); });
     for (const h of history) {
       const li = document.createElement("li");
       const b = document.createElement("button");
       b.type = "button";
-      b.innerHTML = `<span class="ht"></span><span class="hd"></span>`;
+      b.innerHTML = `<span class="hn"></span><span class="ht"></span><span class="hd"></span>`;
+      b.querySelector(".hn").textContent = nums.get(h.id) + ".";
       b.querySelector(".ht").textContent = h.title;
       b.querySelector(".hd").textContent = new Date(h.ts).toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
       b.addEventListener("click", () => { showEntry(h); window.scrollTo({ top: 0, behavior: "smooth" }); });
