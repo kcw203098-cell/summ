@@ -4,7 +4,7 @@
   const $ = (s) => document.querySelector(s);
   const SKEY = "ytnote.settings", HKEY = "ytnote.history", CKEY = "ytnote.lastClip";
   const DEFAULTS = {
-    apiKey: "", model: "gemini-flash-latest", fast: true, autoClip: true, notify: true,
+    apiKey: "", model: "gemini-flash-latest", fast: true, low: false, autoClip: true, notify: true,
     vault: "", folder: "YouTube 요약",
     ttsModel: "gemini-3.8-flash-tts", voice: "Kore", rate: 1,
   };
@@ -43,7 +43,7 @@
     rate: $("#ttsRate"), prev: $("#ttsPrev"), next: $("#ttsNext"),
     hist: $("#hist"), histCount: $("#histCount"),
     dlg: $("#settings"), openSet: $("#openSet"),
-    sKey: $("#sKey"), sModel: $("#sModel"), sFast: $("#sFast"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
+    sKey: $("#sKey"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
     sVoice: $("#sVoice"), sTts: $("#sTts"), sVault: $("#sVault"), sFolder: $("#sFolder"),
     sSave: $("#sSave"), sClose: $("#sClose"), toast: $("#toast"),
   };
@@ -174,6 +174,8 @@
       else if (m.type === "error") onError(m.id, m.message, m.aborted);
       else if (m.type === "model") { settings.model = m.model; saveSettings(); }
       else if (m.type === "retry") { if (viewId === m.id) showRetry(m); }
+      else if (m.type === "log") addLog(m.id, m.line);
+      else if (m.type === "lowOff") { settings.low = false; saveSettings(); toast("이 모델이 저해상도 옵션을 받지 않아 껐습니다"); }
       else if (m.type === "exhausted") markExhausted(m.model);
       else if (m.type === "fastOff") { settings.fast = false; saveSettings(); toast("이 모델이 빠른 모드를 받지 않아 빠른 모드를 껐습니다"); }
       else if (m.type === "open") {
@@ -199,6 +201,26 @@
     });
   }
 
+  // 진단 로그: 설정 > 진단 로그에서 본다 (마지막 80줄만 저장)
+  const LKEY = "ytnote.log";
+  let logLines = store.get(LKEY, []);
+  function addLog(id, line) {
+    const t = new Date().toLocaleTimeString("ko-KR", { hour12: false });
+    logLines.push(`${t} ${String(id).slice(0, 5)} ${line}`);
+    if (logLines.length > 80) logLines = logLines.slice(-80);
+    store.set(LKEY, logLines);
+    const box = document.getElementById("dbg");
+    if (box && box.offsetParent) renderLog();
+  }
+  function renderLog() { const box = document.getElementById("dbg"); if (box) box.textContent = logLines.join("\n") || "(아직 없음)"; }
+  const dc = document.getElementById("dbgCopy");
+  if (dc) dc.addEventListener("click", () => { try { navigator.clipboard.writeText(logLines.join("\n")); toast("로그를 복사했습니다"); } catch { toast("복사하지 못했습니다"); } });
+  // 요약 중에는 경과 시간을 보여 준다 (멈췄는지 구분하려고)
+  setInterval(() => {
+    if (!viewId || !jobs.has(viewId) || !started.has(viewId) || el.status.dataset.kind !== "live") return;
+    const sec = Math.round((Date.now() - started.get(viewId)) / 1000);
+    el.status.textContent = el.status.textContent.replace(/ · 경과 .*$/, "") + " · 경과 " + (sec < 60 ? sec + "초" : Math.floor(sec / 60) + "분 " + (sec % 60) + "초");
+  }, 1000);
   const started = new Map();   // 요약 시작 시각 (방금 시작한 작업을 사라진 것으로 오인하지 않게)
   const resumed = new Set();   // 자동 재시작은 영상마다 한 번만 (요청 낭비 방지)
   function showRetry(info) {
@@ -244,7 +266,7 @@
     el.url.value = `https://www.youtube.com/watch?v=${id}`;
     showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
     setStatus("영상 분석 중…" + jobsNote(), "live");
-    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, notify: !!settings.notify, skip: exhaustedNow() };
+    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, notify: !!settings.notify, skip: exhaustedNow() };
     jobs.set(id, { md: "", title: "" });
     started.set(id, Date.now());
     refreshBar();
@@ -265,6 +287,8 @@
         },
         onModel: (m) => { settings.model = m; saveSettings(); },
         onFastRejected: () => { settings.fast = false; saveSettings(); },
+        onLowRejected: () => { settings.low = false; saveSettings(); },
+        onLog: (line) => addLog(id, line),
         onRetry: (info) => { if (viewId === id) showRetry(info); },
         onExhausted: markExhausted,
       }));
@@ -668,6 +692,8 @@
     el.sKey.value = settings.apiKey;
     el.sModel.value = settings.model;
     el.sFast.checked = !!settings.fast;
+    el.sLow.checked = !!settings.low;
+    renderLog();
     el.sAuto.checked = !!settings.autoClip;
     el.sNotify.checked = !!settings.notify;
     el.sVoice.value = settings.voice;
@@ -684,6 +710,7 @@
       apiKey: el.sKey.value.trim(),
       model: el.sModel.value.trim() || DEFAULTS.model,
       fast: el.sFast.checked,
+      low: el.sLow.checked,
       autoClip: el.sAuto.checked,
       notify: el.sNotify.checked,
       voice: el.sVoice.value || DEFAULTS.voice,

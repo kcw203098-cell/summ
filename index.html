@@ -269,6 +269,7 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
       </datalist>
       <small>틀린 이름이면 사용 가능한 flash 모델로 자동으로 바꿉니다.</small>
     </label>
+    <label class="check" for="sLow"><input id="sLow" type="checkbox"> 프레임 해상도 낮춤 (실험. 빠른 요약이 켜져 있을 때만 적용. 켠 뒤 요약이 멈추면 끄세요)</label>
     <label class="check" for="sFast"><input id="sFast" type="checkbox"> 빠른 요약 (영상 프레임을 5초에 1장만 보고, 추론을 줄입니다. 말 위주 영상은 품질 차이가 작습니다)</label>
     <label class="check" for="sAuto"><input id="sAuto" type="checkbox"> 앱으로 돌아올 때 클립보드의 YouTube 주소를 자동으로 요약</label>
     <label class="check" for="sNotify"><input id="sNotify" type="checkbox"> 앱 밖에 있을 때 요약이 끝나면 알림</label>
@@ -297,6 +298,11 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
       <button class="btn primary" id="sSave" type="submit">저장</button>
     </div>
   </form>
+  <details id="dbgBox" style="margin-top:12px">
+    <summary style="cursor:pointer;font-size:13px;color:var(--muted)">진단 로그 (요약이 안 될 때 확인)</summary>
+    <pre id="dbg" style="white-space:pre-wrap;word-break:break-all;font:12px/1.5 var(--font-mono);max-height:34vh;overflow:auto;user-select:text;margin:8px 0"></pre>
+    <button type="button" id="dbgCopy" class="btn">로그 복사</button>
+  </details>
 </dialog>
 
 <div id="toast" role="status" hidden></div>

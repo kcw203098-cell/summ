@@ -2,7 +2,7 @@
 importScripts("core.js");
 const Core = self.Core;
 
-const CACHE = "ytnote-v14";
+const CACHE = "ytnote-v15";
 const SHELL = ["./", "index.html", "core.js", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -57,7 +57,9 @@ async function runJob(job) {
   let last = 0;
   try {
     const res = await Core.runSummary({
-      id: job.id, apiKey: job.apiKey, model: job.model, fast: job.fast, signal: ctrl.signal,
+      id: job.id, apiKey: job.apiKey, model: job.model, fast: job.fast, low: job.low, signal: ctrl.signal,
+      onLog: (line) => broadcast({ type: "log", id: job.id, line }),
+      onLowRejected: () => broadcast({ type: "lowOff" }),
       onProgress: ({ meta, url, acc }) => {
         r.title = meta.title || "";
         r.md = Core.buildMarkdown(meta, url, acc);

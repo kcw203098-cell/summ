@@ -241,32 +241,43 @@
 
   // fast=true: 프레임을 5초에 1장만 보고(fps 0.2), 추론을 줄인다(thinking low)
   // fast: false/0 = 기본, 1 = 프레임만 줄임(5초에 1장), true/2 = 프레임 + 추론 줄임
-  function summaryBody(url, fast) {
+  function summaryBody(url, fast, low) {
     const level = fast === true ? 2 : +fast || 0;
     const video = { file_data: { file_uri: url } };
     const body = { contents: [{ role: "user", parts: [video, { text: PROMPT }] }] };
     if (level >= 1) {
       video.video_metadata = { fps: 0.2 };
-      // 프레임당 토큰 258 → 66: 영상 입력이 크게 줄어 처리가 빨라진다 (소리는 그대로 32토큰/초)
-      body.generationConfig = { mediaResolution: "MEDIA_RESOLUTION_LOW" };
+      // low: 프레임당 토큰 258 → 66 (실험 옵션, 설정에서 켠다)
+      if (low) body.generationConfig = { mediaResolution: "MEDIA_RESOLUTION_LOW" };
     }
-    if (level >= 2) body.generationConfig.thinkingConfig = { thinkingLevel: "low" };
+    if (level >= 2) { body.generationConfig = body.generationConfig || {}; body.generationConfig.thinkingConfig = { thinkingLevel: "low" }; }
     return body;
   }
 
-  async function streamSummary({ apiKey, model, url, fast, signal, onText }) {
-    const r = await fetch(`${API}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
-      method: "POST", signal,
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify(summaryBody(url, fast)),
-    });
-    if (!r.ok) throw await apiError(r);
+  async function streamSummary({ apiKey, model, url, fast, low, signal, onText, onLog }) {
+    const log = onLog || (() => {});
+    const t = Date.now(), lv = fast === true ? 2 : +fast || 0;
+    log(`요청 보냄 · ${model} · 옵션 ${lv}${low && lv ? "+저해상도" : ""}`);
+    let r;
+    try {
+      r = await fetch(`${API}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
+        method: "POST", signal,
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify(summaryBody(url, fast, low)),
+      });
+    } catch (e) { log(`연결 실패 (${Math.round((Date.now() - t) / 1000)}초): ${e.name} ${String(e.message).slice(0, 50)}`); throw e; }
+    log(`응답 HTTP ${r.status} (${Math.round((Date.now() - t) / 1000)}초)`);
+    if (!r.ok) { const er = await apiError(r); log(`오류: ${String(er.message).slice(0, 90)}`); throw er; }
     const reader = r.body.getReader();
     const dec = new TextDecoder();
-    let buf = "", acc = "";
+    let buf = "", acc = "", first = true;
     for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
+      let chunk;
+      try { chunk = await reader.read(); }
+      catch (e) { log(`스트림 끊김 (${Math.round((Date.now() - t) / 1000)}초, 글자 ${acc.length}): ${e.name} ${String(e.message).slice(0, 40)}`); throw e; }
+      const { value, done } = chunk;
+      if (done) { log(`스트림 끝 (${Math.round((Date.now() - t) / 1000)}초, 글자 ${acc.length})`); break; }
+      if (first) { first = false; log(`첫 데이터 ${Math.round((Date.now() - t) / 1000)}초`); }
       buf += dec.decode(value, { stream: true }).replace(/\r/g, "");
       const { texts, rest, err } = parseSSE(buf);
       buf = rest;
@@ -315,7 +326,7 @@
   // - 빠른 옵션이 거부되면 기본 옵션으로 다시 한다
   // - 모델이 없으면 다른 flash 모델로 바꾸고 설정에 저장한다
   // - 서버 과부하면 같은 모델로 2번 더 기다렸다 하고, 그래도 안 되면 다른 모델로 넘어간다 (설정은 그대로)
-  async function runSummary({ id, apiKey, model, fast: fastIn, signal, onProgress, onModel, onFastRejected, onRetry, skip, onExhausted }) {
+  async function runSummary({ id, apiKey, model, fast: fastIn, low: lowIn, signal, onProgress, onModel, onFastRejected, onLowRejected, onRetry, onLog, skip, onExhausted }) {
     skip = (skip || []).slice();
     const report = [];   // 모델별 실패 이유
     const markExhausted = (mm, e) => {
@@ -330,7 +341,9 @@
     const onText = (acc) => onProgress && onProgress({ meta, url, acc });
     onText("");
     let m = model || "gemini-flash-latest";
-    let fast = !!fastIn;
+    let fast = !!fastIn, low = !!lowIn;
+    const log = (x) => onLog && onLog(x);
+    log(`시작 · ${m} · 빠른 ${fast ? "켬" : "끔"} · 저해상도 ${low ? "켬" : "끔"}`);
     let modelList = null;
     const getModels = async () => modelList || (modelList = await listModels(apiKey));
     // 오늘 한도가 찬 모델이면 처음부터 다른 모델로 시작한다 (요청을 헛되이 쓰지 않게)
@@ -339,19 +352,30 @@
       if (alt) { m = alt; onRetry && onRetry({ reason: "skip", model: alt }); }
     }
     const tryFastThenPlain = async (mm) => {
-      if (!fast) return streamSummary({ apiKey, model: mm, url, fast: false, signal, onText });
+      const base = { apiKey, model: mm, url, signal, onText, onLog };
+      if (!fast) return streamSummary(Object.assign({ fast: false, low: false }, base));
       try {
-        return await streamSummary({ apiKey, model: mm, url, fast: true, signal, onText });
+        return await streamSummary(Object.assign({ fast: true, low }, base));
       } catch (e) {
         if (e.status === 400 && !isKeyError(e)) {
           // 추론 설정만 거부하는 모델(lite 등)이 있다 → 프레임 줄이기는 유지하고 한 번 더
           try {
-            return await streamSummary({ apiKey, model: mm, url, fast: 1, signal, onText });
+            return await streamSummary(Object.assign({ fast: 1, low }, base));
           } catch (e2) {
             if (!(e2.status === 400 && !isKeyError(e2))) throw e2;
           }
+          // 저해상도 옵션만 거부하는 경우: 그 옵션을 빼고 한 번 더
+          if (low) {
+            try {
+              const out2 = await streamSummary(Object.assign({ fast: 1, low: false }, base));
+              low = false; onLowRejected && onLowRejected();
+              return out2;
+            } catch (e3) {
+              if (!(e3.status === 400 && !isKeyError(e3))) throw e3;
+            }
+          }
           // 기본 옵션으로 성공할 때만 "빠른 모드를 지원하지 않음"으로 본다 (비공개 영상 등도 400이 올 수 있음)
-          const out = await streamSummary({ apiKey, model: mm, url, fast: false, signal, onText });
+          const out = await streamSummary(Object.assign({ fast: false, low: false }, base));
           onFastRejected && onFastRejected();
           return out;
         }
@@ -381,6 +405,7 @@
         if (isNetwork(e) && netTry < netWaits.length) {
           const w = netWaits[netTry++];
           onText("");
+          log(`연결 끊김 → ${Math.round(w / 1000)}초 뒤 재시도 ${netTry}/${netWaits.length}`);
           onRetry && onRetry({ reason: "network", wait: w, model: m, attempt: netTry, of: netWaits.length });
           await sleep(w, signal);
           await whenOnline(signal);
@@ -429,6 +454,7 @@
     if (lastErr) { lastErr.report = report; throw lastErr; }
     if (!String(body).trim()) throw new Error("빈 응답을 받았습니다. 다시 시도하세요.");
     await Promise.race([metaP, sleep(2500)]);
+    log(`완료 · ${m} · ${Math.round((Date.now() - t0) / 1000)}초 · 글자 ${String(body).length}`);
     return { meta, url, body, model: m, ms: Date.now() - t0, md: buildMarkdown(meta, url, body, null, m) };
   }
 
@@ -647,7 +673,7 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-23.1";
+  const VERSION = "2026-10-23.2";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
     VERSION, fmtMs,
