@@ -106,6 +106,7 @@
 
   // ───────────── 기록 ─────────────
   function saveHistory(e) {
+    recordPerf(e);
     history = [e].concat(history.filter((h) => h.id !== e.id)).slice(0, 40);
     store.set(HKEY, history);
     renderHistory();
@@ -186,6 +187,7 @@
       else if (m.type === "log") addLog(m.id, m.line);
       else if (m.type === "lowOff") { settings.low = false; saveSettings(); toast("이 모델이 저해상도 옵션을 받지 않아 껐습니다"); }
       else if (m.type === "exhausted") markExhausted(m.model);
+      else if (m.type === "busy") markBusy(m.model);
       else if (m.type === "fastOff") { settings.fast = false; saveSettings(); toast("이 모델이 빠른 모드를 받지 않아 빠른 모드를 껐습니다"); }
       else if (m.type === "open") {
         importInbox().then(() => { const h = history.find((x) => x.id === m.id); if (h) showEntry(h); });
@@ -210,6 +212,26 @@
     });
   }
 
+  // 모델 상태: 최근 과부하(10분) · 최근 성공 기록(속도)
+  const BKEY = "ytnote.busy", PKEY = "ytnote.perf";
+  const busyNow = () => { const o = store.get(BKEY, {}), now = Date.now(); return Object.keys(o).filter((k) => o[k] > now); };
+  function markBusy(model) { const o = store.get(BKEY, {}); o[model] = Date.now() + 10 * 60 * 1000; store.set(BKEY, o); }
+  const goodModels = () => { const o = store.get(PKEY, {}), lim = Date.now() - 6 * 3600 * 1000; return Object.keys(o).filter((k) => o[k].ts > lim).sort((a, b) => o[b].ts - o[a].ts); };
+  function recordPerf(e) {
+    const t = e && e.timing;
+    if (!t || t.split || !t.model || t.firstText == null) return;
+    const o = store.get(PKEY, {});
+    o[t.model] = { ts: e.ts || Date.now(), inTok: (t.tok || {}).in || 0, preMs: t.firstText, level: t.level };
+    store.set(PKEY, o);
+  }
+  function renderPerf() {
+    const box = document.getElementById("perf"); if (!box) return;
+    const o = store.get(PKEY, {}), keys = Object.keys(o).sort((a, b) => o[b].ts - o[a].ts).slice(0, 8);
+    box.textContent = keys.length ? keys.map((k) => {
+      const v = o[k], per = v.inTok ? (v.preMs / 1000 / (v.inTok / 1000)).toFixed(2) + "초/천토큰" : "";
+      return `${k}: 첫 응답 ${(v.preMs / 1000).toFixed(0)}초 · 입력 ${v.inTok} ${per}`;
+    }).join("\n") : "(아직 없음)";
+  }
   // 구간별 시간 패널
   function showTiming(t) {
     const box = document.getElementById("timing"), body = document.getElementById("timingBody"), sum = document.getElementById("timingSum");
@@ -248,6 +270,8 @@
     const pre = info.seg ? `구간 ${info.seg}/${info.of}: ` : "";
     const text = pre + (info.reason === "nosplit"
       ? "구간 요청이 거부되어 전체 영상을 한 번에 요약합니다…"
+      : info.reason === "busy"
+      ? `설정한 모델이 최근 서버 과부하였습니다. ${info.model}(으)로 요약합니다…`
       : info.reason === "skip"
       ? `설정한 모델은 오늘 한도가 찼습니다. ${info.model}(으)로 요약합니다…`
       : info.reason === "switch"
@@ -334,7 +358,7 @@
     el.url.value = `https://www.youtube.com/watch?v=${id}`;
     showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
     setStatus("영상 분석 중…" + jobsNote(), "live");
-    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, split: !!settings.split, duration: 0, notify: !!settings.notify, skip: exhaustedNow() };
+    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, split: !!settings.split, duration: 0, notify: !!settings.notify, skip: exhaustedNow(), busy: busyNow(), good: goodModels() };
     jobs.set(id, { md: "", title: "" });
     started.set(id, Date.now());
     refreshBar();
@@ -366,6 +390,7 @@
         onModel: (m) => { settings.model = m; saveSettings(); },
         onFastRejected: () => { settings.fast = false; saveSettings(); },
         onLowRejected: () => { settings.low = false; saveSettings(); },
+        onBusy: markBusy,
         onLog: (line) => addLog(id, line),
         onRetry: (info) => { if (viewId === id) showRetry(info); },
         onExhausted: markExhausted,
@@ -774,7 +799,7 @@
     el.sFast.checked = !!settings.fast;
     el.sLow.checked = !!settings.low;
     el.sSplit.checked = !!settings.split;
-    renderLog();
+    renderLog(); renderPerf();
     el.sAuto.checked = !!settings.autoClip;
     el.sNotify.checked = !!settings.notify;
     el.sVoice.value = settings.voice;

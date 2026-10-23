@@ -309,6 +309,10 @@ dialog .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: 
       <button class="btn primary" id="sSave" type="submit">저장</button>
     </div>
   </form>
+  <details id="perfBox" style="margin-top:12px">
+    <summary style="cursor:pointer;font-size:13px;color:var(--muted)">모델별 최근 속도 (첫 응답까지)</summary>
+    <pre id="perf" style="white-space:pre-wrap;word-break:break-all;font:12px/1.6 var(--font-mono);margin:8px 0;user-select:text"></pre>
+  </details>
   <details id="dbgBox" style="margin-top:12px">
     <summary style="cursor:pointer;font-size:13px;color:var(--muted)">진단 로그 (요약이 안 될 때 확인)</summary>
     <pre id="dbg" style="white-space:pre-wrap;word-break:break-all;font:12px/1.5 var(--font-mono);max-height:34vh;overflow:auto;user-select:text;margin:8px 0"></pre>

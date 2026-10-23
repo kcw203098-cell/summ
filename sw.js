@@ -2,7 +2,7 @@
 importScripts("core.js");
 const Core = self.Core;
 
-const CACHE = "ytnote-v20";
+const CACHE = "ytnote-v21";
 const SHELL = ["./", "index.html", "core.js", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -69,7 +69,8 @@ async function runJob(job) {
       onModel: (model) => broadcast({ type: "model", model }),
       onFastRejected: () => broadcast({ type: "fastOff" }),
       onRetry: (info) => broadcast(Object.assign({ type: "retry", id: job.id }, info)),
-      skip: job.skip,
+      skip: job.skip, busy: job.busy, good: job.good,
+      onBusy: (model) => broadcast({ type: "busy", model }),
       onExhausted: (model) => broadcast({ type: "exhausted", model }),
     });
     const entry = { id: job.id, title: res.meta.title || job.id, md: res.md, ts: Date.now(), model: res.model, ms: res.ms, timing: res.timing, partial: res.partial || 0 };

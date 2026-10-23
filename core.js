@@ -342,8 +342,16 @@
   // - 빠른 옵션이 거부되면 기본 옵션으로 다시 한다
   // - 모델이 없으면 다른 flash 모델로 바꾸고 설정에 저장한다
   // - 서버 과부하면 같은 모델로 2번 더 기다렸다 하고, 그래도 안 되면 다른 모델로 넘어간다 (설정은 그대로)
-  async function runSummary({ id, apiKey, model, fast: fastIn, low: lowIn, range, metaIn, noLadder, signal, onProgress, onModel, onFastRejected, onLowRejected, onRetry, onLog, skip, onExhausted }) {
+  async function runSummary({ id, apiKey, model, fast: fastIn, low: lowIn, range, metaIn, noLadder, signal, onProgress, onModel, onFastRejected, onLowRejected, onRetry, onLog, skip, onExhausted, busy, good, onBusy }) {
     skip = (skip || []).slice();
+    busy = (busy || []).slice();    // 최근 서버 과부하(503)였던 모델: 잠시 뒤로 미룬다
+    good = (good || []).slice();    // 최근 성공한 모델 (최근 것부터)
+    const markBusy = (mm) => { if (!busy.includes(mm)) { busy.push(mm); onBusy && onBusy(mm); } };
+    // 과부하 모델은 뒤로, 최근 성공한 모델은 앞으로
+    const orderAlts = (list) => {
+      const gi = (x) => { const k = good.indexOf(x); return k < 0 ? 99 : k; };
+      return list.map((x, i) => ({ x, i })).sort((a, b) => (busy.includes(a.x) - busy.includes(b.x)) || (gi(a.x) - gi(b.x)) || (a.i - b.i)).map((o) => o.x);
+    };
     const report = [];   // 모델별 실패 이유
     const markExhausted = (mm, e) => {
       if (e && e.name !== "AbortError") report.push({ model: mm, why: failReason(e) });
@@ -369,9 +377,10 @@
     };
     const waitFor = async (ms) => { stats.waitMs += ms; await sleep(ms, signal); };
     // 오늘 한도가 찬 모델이면 처음부터 다른 모델로 시작한다 (요청을 헛되이 쓰지 않게)
-    if (skip.includes(m)) {
-      const alt = altFlashModels(await getModels(), skip)[0];
-      if (alt) { m = alt; onRetry && onRetry({ reason: "skip", model: alt }); }
+    if (skip.includes(m) || busy.includes(m)) {
+      const cands = orderAlts(altFlashModels(await getModels(), skip.concat([m])));
+      const alt = cands.find((x) => !busy.includes(x)) || (skip.includes(m) ? cands[0] : null);
+      if (alt) { m = alt; onRetry && onRetry({ reason: skip.includes(model) ? "skip" : "busy", model: alt }); log(`${model} 는 ${skip.includes(model) ? "오늘 한도 소진" : "최근 서버 과부하"} → ${alt} 로 시작`); }
     }
     const tryFastThenPlain = async (mm) => {
       const base = { apiKey, model: mm, url, range, signal, onText, onLog, stats };
@@ -455,6 +464,8 @@
           continue;
         }
         if (!isOverloaded(e)) break;
+        // 과부하(503)는 모델 단위라서 같은 모델을 다시 두드리지 않고 바로 다른 모델로 간다 (거절을 받는 데만 약 30초가 걸린다)
+        if (altFlashModels(await getModels(), skip.concat([m])).length) { markBusy(m); log(`서버 과부하 → 같은 모델 재시도 없이 다른 모델로`); break; }
         onText("");
         onRetry && onRetry({ reason: "overloaded", wait: waits[attempt], model: m, attempt: attempt + 1 });
         await waitFor(waits[attempt]);
@@ -463,12 +474,13 @@
     // 한도는 모델마다 따로 센다 → 다른 모델은 한도가 남아 있을 수 있다
     if (lastErr && !isTokenMinute(lastErr) && (isOverloaded(lastErr) || isQuota(lastErr))) {
       const tried = skip.concat([m]);
-      for (const alt of altFlashModels(await getModels(), tried)) {
+      for (const alt of orderAlts(altFlashModels(await getModels(), tried))) {
         onText("");
         onRetry && onRetry({ reason: "switch", model: alt });
         try { m = alt; body = await tryFastThenPlain(alt); lastErr = null; break; }
         catch (e) {
           tried.push(alt); markExhausted(alt, e);
+          if (isOverloaded(e)) markBusy(alt);
           if (e.name === "AbortError" || isKeyError(e)) { lastErr = e; break; }
           if (!lastErr || isQuota(e) || !isQuota(lastErr)) lastErr = e;   // 한도 오류를 우선 보여 준다
         }
@@ -886,7 +898,7 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-23.7";
+  const VERSION = "2026-10-23.8";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
     VERSION, fmtMs, timingReport, runSplit, planSegments, segmentPrompt, fmtClock,
