@@ -222,7 +222,8 @@
       self.addEventListener("online", () => { clearTimeout(t); res(); }, { once: true });
       if (signal) signal.addEventListener("abort", res, { once: true });
     });
-  const isTokenMinute = (e) => (e && e.quotaIds || []).some((q) => /token/i.test(q) && /minute/i.test(q));
+  // 한도값 0은 "이 모델은 무료 등급에서 제공하지 않음"이다. 영상이 커서 생긴 분당 토큰 한도와 구분한다
+  const isTokenMinute = (e) => !!e && e.limit !== 0 && (e.quotaIds || []).some((q) => /token/i.test(q) && /minute/i.test(q));
   const isQuota = (e) => e && (e.status === 429 || /quota|exhausted/i.test(String(e.message)));
   // 하루 한도인지 (분당 한도는 잠깐 기다리면 풀린다)
   const isDailyQuota = (e) => isQuota(e) && ((e.quotaIds || []).some((q) => /PerDay/i.test(q)) || /per day|daily/i.test(String(e.message)) || e.limit === 0);
@@ -263,7 +264,7 @@
     const rec = { model, level: lv, low: !!(low && lv) };
     if (stats) stats.attempts.push(rec);
     const sec = () => Math.round((Date.now() - t) / 1000);
-    const fail = (e) => { rec.failed = true; rec.end = Date.now() - t; rec.err = e.status || e.name || "오류"; };
+    const fail = (e) => { rec.failed = true; rec.end = Date.now() - t; rec.err = e.status || e.name || "오류"; rec.msg = String((e && e.message) || "").slice(0, 70); };
     log(`요청 보냄 · ${model} · 옵션 ${lv}${rec.low ? "+저해상도" : ""}`);
     let r;
     try {
@@ -472,8 +473,9 @@
       }
     }
     // 한도는 모델마다 따로 센다 → 다른 모델은 한도가 남아 있을 수 있다
-    if (lastErr && !isTokenMinute(lastErr) && (isOverloaded(lastErr) || isQuota(lastErr))) {
+    if (lastErr && (isOverloaded(lastErr) || isQuota(lastErr))) {
       const tried = skip.concat([m]);
+      let tokFails = isTokenMinute(lastErr) ? 1 : 0;   // 서로 다른 모델 2개가 분당 토큰으로 거절하면 영상이 큰 것이다
       for (const alt of orderAlts(altFlashModels(await getModels(), tried))) {
         onText("");
         onRetry && onRetry({ reason: "switch", model: alt });
@@ -482,6 +484,8 @@
           tried.push(alt); markExhausted(alt, e);
           if (isOverloaded(e)) markBusy(alt);
           if (e.name === "AbortError" || isKeyError(e)) { lastErr = e; break; }
+          if (isNetwork(e)) { lastErr = e; break; }   // 연결이 끊겼는데 모델 목록을 끝까지 돌아 봐야 소용없다
+          if (isTokenMinute(e) && ++tokFails >= 2) { lastErr = e; break; }
           if (!lastErr || isQuota(e) || !isQuota(lastErr)) lastErr = e;   // 한도 오류를 우선 보여 준다
         }
       }
@@ -527,7 +531,7 @@
   // 반환: { model, ms, tried: [{model, ms|why}], cached, total } 또는 null (전부 실패·시간 초과)
   // 모델별 실제 "첫 글자까지" 시간 기록으로 속도를 예측한다. 핑은 실제 속도와 달랐다(핑 1.6초 모델이 실제로는 37~150초).
   // 최근 24시간, 최근 5개의 중앙값 (이상치 한 번에 흔들리지 않게)
-  const LAT_WINDOW = 24 * 3600 * 1000, LAT_N = 5, EXPLORE_MS = 20000;
+  const LAT_WINDOW = 24 * 3600 * 1000, LAT_N = 5, EXPLORE_MS = 60000;
   function latScore(samples, now) {
     now = now || Date.now();
     const v = (samples || []).filter((x) => x && now - x.ts < LAT_WINDOW).slice(-LAT_N).map((x) => x.ms).sort((a, b) => a - b);
@@ -736,7 +740,7 @@
 
   // ───────────── 구간별 시간 ─────────────
   // 시도 기록을 짧게: [모델, 옵션, 성공?, 오류, 응답헤더ms, 첫글자ms, 끝ms]
-  const compactAtt = (a) => (a || []).map((x) => [x.model, x.level, x.failed ? 0 : 1, x.err || 0, x.headers == null ? null : x.headers, x.firstText == null ? null : x.firstText, x.end == null ? null : x.end]);
+  const compactAtt = (a) => (a || []).map((x) => [x.model, x.level, x.failed ? 0 : 1, x.err || 0, x.headers == null ? null : x.headers, x.firstText == null ? null : x.firstText, x.end == null ? null : x.end].concat(!x.failed || typeof x.err === "number" ? [] : [x.msg || ""]));
   // 마지막으로 성공한 시도를 기준으로 구간을 나눈다
   function makeTiming(stats, total, model) {
     const fin = [...stats.attempts].reverse().find((a) => !a.failed) || {};
@@ -1039,7 +1043,7 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-24.15";
+  const VERSION = "2026-10-25.1";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
     VERSION, fmtMs, timingReport, pickFastest, PING_TTL, runSplit, latScore, planSegments, segmentPrompt, fmtClock,

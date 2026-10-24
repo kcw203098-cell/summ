@@ -41,7 +41,7 @@
     bar: $("#bar"), cpMd: $("#cpMd"), cpTxt: $("#cpTxt"), share: $("#share"), obs: $("#obs"),
     play: $("#ttsPlay"), playIcon: $("#ttsIcon"), playLabel: $("#ttsLabel"), prog: $("#ttsProg"),
     rate: $("#ttsRate"), prev: $("#ttsPrev"), next: $("#ttsNext"),
-    hist: $("#hist"), histCount: $("#histCount"), histCnt2: $("#histCnt2"), histDlg: $("#histDlg"), histClose: $("#histClose"), openHist: $("#openHist"), acts: $("#acts"), pl2: $("#pl2"),
+    hist: $("#hist"), histCount: $("#histCount"), histCnt2: $("#histCnt2"), failBox: $("#failBox"), failList: $("#failList"), failCount: $("#failCount"), failCnt: $("#failCnt"), okHead: $("#okHead"), histDlg: $("#histDlg"), histClose: $("#histClose"), openHist: $("#openHist"), acts: $("#acts"), pl2: $("#pl2"),
     dlg: $("#settings"), openSet: $("#openSet"),
     sKey: $("#sKey"), keyMask: $("#keyMask"), keyChange: $("#keyChange"), keyEdit: $("#keyEdit"), keyDel: $("#keyDel"), sModel: $("#sModel"), sFast: $("#sFast"), sLow: $("#sLow"), sSplit: $("#sSplit"), sPick: $("#sPick"), sTheme: $("#sTheme"), sSize: $("#sSize"), sAuto: $("#sAuto"), sNotify: $("#sNotify"),
     sVoice: $("#sVoice"), sTts: $("#sTts"), sVault: $("#sVault"), sFolder: $("#sFolder"),
@@ -112,12 +112,13 @@
     el.out.classList.remove("streaming");
     el.out.innerHTML = `<p class="wait">${C.escapeHtml(text)}</p>`;
   }
-  function showError(text) {
+  function showError(text, id) {
     el.empty.hidden = true;
     el.out.hidden = false;
     el.out.classList.remove("streaming");
-    el.out.innerHTML = `<p class="err">${C.escapeHtml(text)}</p>`;
+    el.out.innerHTML = `<p class="err">${C.escapeHtml(text)}</p>` + (id ? `<p class="retry"><button type="button" class="btn primary" data-retry="${C.escapeHtml(id)}">다시 시작</button></p>` : "");
   }
+  el.out.addEventListener("click", (ev) => { const b = ev.target.closest && ev.target.closest("[data-retry]"); if (b) retryFailed(b.dataset.retry); });
   function showEntry(e, quiet) {
     viewId = e.id;
     current = e;
@@ -130,13 +131,50 @@
 
   // ───────────── 기록 ─────────────
   function saveHistory(e) {
+    dropFailed(e.id);
     recordPerf(e);
     const rr = runFromEntry(e); if (rr && !e.recorded) { recordRun(Object.assign({ t: e.ts || Date.now() }, rr)); }
     history = [e].concat(history.filter((h) => h.id !== e.id)).slice(0, 40);
     store.set(HKEY, history);
     renderHistory();
   }
+  // ───────────── 실패한 요약: 주소를 잃지 않게 목록에 남긴다 ─────────────
+  const FKEY = "ytnote.failed";
+  const getFailed = () => store.get(FKEY, []);
+  function addFailed(id, message, title) {
+    const a = getFailed().filter((f) => f.id !== id);
+    a.unshift({ id, ts: Date.now(), msg: String(message || "").split("\n")[0].slice(0, 160), title: title || "" });
+    store.set(FKEY, a.slice(0, 20));
+    renderFailed();
+  }
+  function dropFailed(id) { const a = getFailed(); if (a.some((f) => f.id === id)) { store.set(FKEY, a.filter((f) => f.id !== id)); renderFailed(); } }
+  function renderFailed() {
+    const a = getFailed();
+    el.failBox.hidden = !a.length;
+    el.okHead.hidden = !a.length;
+    el.failCount.textContent = a.length;
+    el.failCnt.hidden = !a.length;
+    el.failCnt.textContent = "실패 " + a.length;
+    el.failList.innerHTML = "";
+    for (const f of a) {
+      const li = document.createElement("li");
+      li.innerHTML = '<div class="ft"></div><div class="fm"></div><div class="fb"><button type="button" class="btn primary">다시 시작</button><button type="button" class="btn">삭제</button></div>';
+      li.querySelector(".ft").textContent = "⚠ " + (f.title || "youtu.be/" + f.id);
+      li.querySelector(".fm").textContent = new Date(f.ts).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }) + " · " + f.msg;
+      const [bt, bd] = li.querySelectorAll("button");
+      bt.addEventListener("click", () => retryFailed(f.id));
+      bd.addEventListener("click", () => dropFailed(f.id));
+      el.failList.appendChild(li);
+    }
+  }
+  function retryFailed(id) {
+    if (el.histDlg.open) el.histDlg.close();
+    el.url.value = `https://www.youtube.com/watch?v=${id}`;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    summarize(id, true);
+  }
   function renderHistory() {
+    renderFailed();
     el.histCount.textContent = history.length; el.histCnt2.textContent = history.length;
     el.hist.innerHTML = "";
     // 날짜별 번호: 그날 먼저 요약한 것이 1번 (목록은 최신순이라 위쪽 번호가 더 크다)
@@ -161,6 +199,7 @@
     let items = [];
     try { items = (await C.idb.all("inbox")) || []; } catch { return; }
     for (const e of items.sort((a, b) => a.ts - b.ts)) {
+      if (e.failed) { if (!jobs.has(e.id)) addFailed(e.id, e.message, e.title); try { await C.idb.del("inbox", e.id); } catch {} continue; }
       saveHistory(e);
       jobs.delete(e.id);
       try { await C.idb.del("inbox", e.id); } catch {}
@@ -226,13 +265,15 @@
   function onError(id, message, aborted, extra) {
     if (!aborted && extra && extra.att) recordLatAtt(extra.att);
     if (!aborted && extra && extra.att) recordRun({ ok: 0, tot: extra.totalMs, att: extra.att, pick: pickCompact(extra.pick), why: String(message).split("\n")[0].slice(0, 80) });
+    const ttl = (jobs.get(id) || {}).title || "";
+    if (!aborted) { addFailed(id, message, ttl); C.idb.del("inbox", id).catch(() => {}); }
     jobs.delete(id);
     dropReq(id);
     if (viewId === id) {
       const next = aborted ? null : focusFirst();   // 다른 요청이 남아 있으면 그쪽을 따라가고 실패는 알림으로만
-      if (next) toast("요약 실패 · " + message.slice(0, 40));
-      else { showError(message); setStatus(aborted ? "멈춤" : "실패", "err"); }
-    } else if (!aborted) toast("요약 실패 · " + message.slice(0, 40));
+      if (next) toast("요약 실패 · 저장된 요약 목록에서 다시 시작할 수 있습니다");
+      else { showError(message, aborted ? null : id); setStatus(aborted ? "멈춤" : "실패", "err"); }
+    } else if (!aborted) toast("요약 실패 · 저장된 요약 목록에서 다시 시작할 수 있습니다");
     refreshBar();
   }
 
@@ -475,6 +516,7 @@
     // 먼저 요청한 요약이 아직 진행 중이면 화면을 뺏지 않는다. 새 요청은 뒤에서 하고 결과는 목록에 쌓는다
     const queued = getReqs().some((r) => jobs.has(r.id));
     addReq(id);
+    dropFailed(id);
     if (queued) {
       toast("뒤에서 요약합니다. 끝나면 최근 요약 목록에 쌓입니다.");
     } else {

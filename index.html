@@ -230,6 +230,18 @@ dialog .check > span { min-width: 0; line-height: 1.5; }
 dialog .check small { display: block; margin-top: 2px; }
 dialog .check > input { flex: none; }
 
+.sechead { font: 700 12px var(--font-mono); letter-spacing: .04em; color: var(--muted); margin: 12px 0 6px; }
+#failBox .sechead { color: var(--err); margin-top: 0; }
+#failList { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 6px; }
+#failList li { border: 1px solid color-mix(in srgb, var(--err) 45%, var(--line)); background: color-mix(in srgb, var(--err) 8%, var(--surface)); border-radius: 10px; padding: 10px 12px; display: grid; gap: 6px; min-width: 0; }
+#failList .ft { font: 600 14px var(--font-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#failList .fm { font: 12px/1.45 var(--font-body); color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+#failList .fb { display: flex; gap: 6px; }
+#failList .fb .btn { height: 36px; font-size: 13px; padding: 0 14px; border-radius: 10px; }
+#failList .fb .primary { flex: 1; }
+#openHist .cnt.bad { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); margin-left: 4px; }
+.note .retry { margin: 12px 0 8px; }
+
 #toast {
   position: fixed; left: 50%; transform: translateX(-50%); z-index: 20;
   bottom: calc(var(--dock, 150px) + 10px);
@@ -261,6 +273,11 @@ dialog .check > input { flex: none; }
 
 <dialog id="histDlg" class="sheet">
   <div class="sheethead"><b>저장된 요약 <span id="histCount">0</span>개</b><button type="button" class="iconbtn sm" id="histClose" aria-label="닫기">✕</button></div>
+  <div id="failBox" hidden>
+    <div class="sechead">실패한 요약 <span id="failCount">0</span>개</div>
+    <ul id="failList"></ul>
+  </div>
+  <div class="sechead" id="okHead">저장된 요약</div>
   <ul id="hist"></ul>
 </dialog>
 
@@ -292,7 +309,7 @@ dialog .check > input { flex: none; }
   <div class="main">
     <button class="btn primary" id="go" type="button">요약</button>
     <button class="btn" id="stop" type="button" hidden>멈춤</button>
-    <button class="btn" id="openHist" type="button">저장된 요약 <span class="cnt" id="histCnt2">0</span></button>
+    <button class="btn" id="openHist" type="button">저장된 요약 <span class="cnt" id="histCnt2">0</span><span class="cnt bad" id="failCnt" hidden>0</span></button>
     <button class="iconbtn" id="openSet" type="button" aria-label="설정">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
     </button>
