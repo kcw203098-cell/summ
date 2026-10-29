@@ -236,6 +236,7 @@
       if (isDailyQuota(e)) return `하루 한도${e.limit ? " " + e.limit + "회" : ""} 다 씀`;
       return `분당 한도${e.limit ? " " + e.limit + "회" : ""} 초과`;
     }
+    if (e && e.stall) return "응답이 오래 걸려 건너뜀";
     if (isOverloaded(e)) return "서버 과부하";
     if (isNetwork(e)) return "연결이 끊김 (앱이 백그라운드에 있었을 수 있음)";
     if (isMissingModel(e)) return "이 키로 쓸 수 없는 모델";
@@ -258,22 +259,35 @@
     return body;
   }
 
-  async function streamSummary({ apiKey, model, url, fast, low, range, signal, onText, onLog, stats }) {
+  async function streamSummary({ apiKey, model, url, fast, low, range, signal, onText, onLog, stats, stallMs }) {
     const log = onLog || (() => {});
     const t = Date.now(), lv = fast === true ? 2 : +fast || 0;
     const rec = { model, level: lv, low: !!(low && lv) };
     if (stats) stats.attempts.push(rec);
     const sec = () => Math.round((Date.now() - t) / 1000);
     const fail = (e) => { rec.failed = true; rec.end = Date.now() - t; rec.err = e.status || e.name || "오류"; rec.msg = String((e && e.message) || "").slice(0, 70); };
-    log(`요청 보냄 · ${model} · 옵션 ${lv}${rec.low ? "+저해상도" : ""}`);
+    log(`요청 보냄 · ${model} · 옵션 ${lv}${rec.low ? "+저해상도" : ""}${stallMs ? ` · ${Math.round(stallMs / 1000)}초 안에 응답 없으면 다른 모델` : ""}`);
+    // 응답 헤더는 첫 데이터와 함께 온다. 서버가 오래 붙들고 있다가 503을 주거나 느린 줄에 서 있는 모델은 기다리지 않고 넘어간다
+    const ac = new AbortController();
+    let stalled = false, timer = null;
+    const onExt = () => ac.abort();
+    if (signal) { if (signal.aborted) ac.abort(); else signal.addEventListener("abort", onExt, { once: true }); }
+    if (stallMs) timer = setTimeout(() => { stalled = true; ac.abort(); }, stallMs);
+    const release = () => { if (timer) clearTimeout(timer); if (signal) signal.removeEventListener("abort", onExt); };
     let r;
     try {
       r = await fetch(`${API}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
-        method: "POST", signal,
+        method: "POST", signal: ac.signal,
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify(summaryBody(url, fast, low, range)),
       });
-    } catch (e) { log(`연결 실패 (${sec()}초): ${e.name} ${String(e.message).slice(0, 50)}`); fail(e); throw e; }
+    } catch (e0) {
+      release();
+      let e = e0;
+      if (stalled && !(signal && signal.aborted)) { e = new Error(`응답이 ${Math.round(stallMs / 1000)}초 넘게 없음`); e.name = "StallError"; e.stall = true; }
+      log(`연결 실패 (${sec()}초): ${e.name} ${String(e.message).slice(0, 50)}`); fail(e); throw e;
+    }
+    if (timer) { clearTimeout(timer); timer = null; }
     rec.headers = Date.now() - t;
     log(`응답 HTTP ${r.status} (${sec()}초)`);
     if (!r.ok) { const er = await apiError(r); log(`오류: ${String(er.message).slice(0, 90)}`); if (isQuota(er)) log(`한도 종류: ${isTokenMinute(er) ? "분당 토큰" : isDailyQuota(er) ? "하루" : (er.quotaIds || []).length ? "분당(요청)" : "알 수 없음(quotaId 없음→분당으로 처리)"} · quotaId: ${(er.quotaIds || []).join(", ") || "없음"}${er.limit != null ? " · 한도값 " + er.limit : ""}${er.retryDelay ? " · 재시도 " + er.retryDelay + "초" : ""}`); fail(er); throw er; }
@@ -291,7 +305,7 @@
     for (;;) {
       let chunk;
       try { chunk = await reader.read(); }
-      catch (e) { log(`스트림 끊김 (${sec()}초, 글자 ${acc.length}): ${e.name} ${String(e.message).slice(0, 40)}`); fail(e); throw e; }
+      catch (e) { release(); log(`스트림 끊김 (${sec()}초, 글자 ${acc.length}): ${e.name} ${String(e.message).slice(0, 40)}`); fail(e); throw e; }
       const { value, done } = chunk;
       if (done) break;
       buf += dec.decode(value, { stream: true }).replace(/\r/g, "");
@@ -301,6 +315,7 @@
       take(res);
     }
     take(parseSSE(buf + "\n"));
+    release();
     rec.end = Date.now() - t; rec.chars = acc.length;
     log(`스트림 끝 (${sec()}초, 글자 ${acc.length})`);
     return acc;
@@ -329,7 +344,7 @@
   // 요약에 쓸 수 있는 모델 전부 (계정에서 실제로 보이는 목록 기준)
   // 순서: Flash → Flash-Lite → Pro → 기타, 각 그룹 안에서 정식 → 미리보기, 새 버전 먼저
   function altFlashModels(models, exclude) {
-    const bad = ["image", "tts", "live", "audio", "embedding", "aqa", "imagen", "veo", "gemma", "robotics", "computer-use", "native", "learnlm", "thinking-exp", "nano"];
+    const bad = ["image", "tts", "live", "audio", "embedding", "aqa", "imagen", "veo", "gemma", "robotics", "computer-use", "native", "learnlm", "thinking-exp", "nano", "transcribe"];
     const names = [...new Set((models || [])
       .filter((m) => !m.supportedGenerationMethods || m.supportedGenerationMethods.includes("generateContent"))
       .map((m) => String(m.name || "").replace(/^models\//, ""))
@@ -343,7 +358,7 @@
   // - 빠른 옵션이 거부되면 기본 옵션으로 다시 한다
   // - 모델이 없으면 다른 flash 모델로 바꾸고 설정에 저장한다
   // - 서버 과부하면 같은 모델로 2번 더 기다렸다 하고, 그래도 안 되면 다른 모델로 넘어간다 (설정은 그대로)
-  async function runSummary({ id, apiKey, model, fast: fastIn, low: lowIn, range, metaIn, noLadder, signal, onProgress, onModel, onFastRejected, onLowRejected, onRetry, onLog, skip, onExhausted, busy, good, onBusy }) {
+  async function runSummary({ id, apiKey, model, fast: fastIn, low: lowIn, range, metaIn, noLadder, signal, onProgress, onModel, onFastRejected, onLowRejected, onRetry, onLog, skip, onExhausted, busy, good, onBusy, stallAfter }) {
     skip = (skip || []).slice();
     busy = (busy || []).slice();    // 최근 서버 과부하(503)였던 모델: 잠시 뒤로 미룬다
     good = (good || []).slice();    // 최근 성공한 모델 (최근 것부터)
@@ -351,7 +366,9 @@
     // 과부하 모델은 뒤로, 최근 성공한 모델은 앞으로
     const orderAlts = (list) => {
       const gi = (x) => { const k = good.indexOf(x); return k < 0 ? 99 : k; };
-      return list.map((x, i) => ({ x, i })).sort((a, b) => (busy.includes(a.x) - busy.includes(b.x)) || (gi(a.x) - gi(b.x)) || (a.i - b.i)).map((o) => o.x);
+      // 기록이 없는 모델 중에서는 lite를 먼저 (실제 기록: lite 중앙값 14.8초, 같은 시간대 다른 flash는 107초 이상인 경우가 많았다)
+      const lt = (x) => (/lite/.test(x) ? 0 : 1);
+      return list.map((x, i) => ({ x, i })).sort((a, b) => (busy.includes(a.x) - busy.includes(b.x)) || (gi(a.x) - gi(b.x)) || (lt(a.x) - lt(b.x)) || (a.i - b.i)).map((o) => o.x);
     };
     const report = [];   // 모델별 실패 이유
     const markExhausted = (mm, e) => {
@@ -383,8 +400,11 @@
       const alt = cands.find((x) => !busy.includes(x)) || (skip.includes(m) ? cands[0] : null);
       if (alt) { m = alt; onRetry && onRetry({ reason: skip.includes(model) ? "skip" : "busy", model: alt }); log(`${model} 는 ${skip.includes(model) ? "오늘 한도 소진" : "최근 서버 과부하"} → ${alt} 로 시작`); }
     }
+    // 응답이 이 시간 안에 오지 않으면 다른 모델로 넘어간다. 다른 모델이 없으면 기다린다
+    const STALL = stallAfter == null ? 45000 : stallAfter;
+    let stallMs = noLadder ? 0 : STALL;
     const tryFastThenPlain = async (mm) => {
-      const base = { apiKey, model: mm, url, range, signal, onText, onLog, stats };
+      const base = { apiKey, model: mm, url, range, signal, onText, onLog, stats, stallMs };
       // 구간 요약: 옵션을 낮춰 가며 재시도하지 않는다 (호출한 쪽이 한 번에 판단한다)
       if (noLadder) return streamSummary(Object.assign({ fast: fastIn === true ? 2 : +fastIn || 0, low }, base));
       if (!fast) return streamSummary(Object.assign({ fast: false, low: false }, base));
@@ -436,6 +456,11 @@
     for (let attempt = 0; attempt <= waits.length; attempt++) {
       try { body = await withModelFix(); lastErr = null; break; }
       catch (e) {
+        if (e && e.stall) {
+          lastErr = e; markExhausted(m, e);
+          if (altFlashModels(await getModels(), skip.concat([m])).length) { markBusy(m); log(`응답 ${Math.round(STALL / 1000)}초 지연 → 다른 모델로`); break; }
+          stallMs = 0; attempt--; continue;   // 바꿀 모델이 없다: 기다리는 수밖에 없다
+        }
         if (isNetwork(e) && netTry < netWaits.length) {
           const w = netWaits[netTry++];
           onText("");
@@ -473,16 +498,30 @@
       }
     }
     // 한도는 모델마다 따로 센다 → 다른 모델은 한도가 남아 있을 수 있다
-    if (lastErr && (isOverloaded(lastErr) || isQuota(lastErr))) {
+    if (lastErr && (isOverloaded(lastErr) || isQuota(lastErr) || lastErr.stall)) {
       const tried = skip.concat([m]);
       let tokFails = isTokenMinute(lastErr) ? 1 : 0;   // 서로 다른 모델 2개가 분당 토큰으로 거절하면 영상이 큰 것이다
-      for (const alt of orderAlts(altFlashModels(await getModels(), tried))) {
+      const attemptAlt = async (alt) => {
+        for (let nt = 0; ; nt++) {
+          try { return await tryFastThenPlain(alt); }
+          catch (e) {
+            if (!isNetwork(e) || nt >= 2) throw e;
+            const w = nt ? 8000 : 3000;
+            log(`연결 끊김 → ${w / 1000}초 뒤 같은 모델(${alt}) 재시도`);
+            await waitFor(w); await whenOnline(signal);
+          }
+        }
+      };
+      const altList = orderAlts(altFlashModels(await getModels(), tried));
+      for (let ai = 0; ai < altList.length; ai++) {
+        const alt = altList[ai];
+        stallMs = noLadder || ai >= altList.length - 1 ? 0 : STALL;   // 마지막 후보는 끝까지 기다린다
         onText("");
         onRetry && onRetry({ reason: "switch", model: alt });
-        try { m = alt; body = await tryFastThenPlain(alt); lastErr = null; break; }
+        try { m = alt; body = await attemptAlt(alt); lastErr = null; break; }
         catch (e) {
           tried.push(alt); markExhausted(alt, e);
-          if (isOverloaded(e)) markBusy(alt);
+          if (isOverloaded(e) || e.stall) markBusy(alt);
           if (e.name === "AbortError" || isKeyError(e)) { lastErr = e; break; }
           if (isNetwork(e)) { lastErr = e; break; }   // 연결이 끊겼는데 모델 목록을 끝까지 돌아 봐야 소용없다
           if (isTokenMinute(e) && ++tokFails >= 2) { lastErr = e; break; }
@@ -550,7 +589,7 @@
       // 기록된 모델이 모두 느리다 → 기록 없는 모델을 한 번 시험해 본다
       try {
         const models = await listModels(args.apiKey);
-        const unk = altFlashModels(models, skip).filter((x) => live(x) && !latScore(lat[x]));
+        const unk = altFlashModels(models, skip).filter((x) => live(x) && !latScore(lat[x])).sort((a, b) => (/lite/.test(b) - /lite/.test(a)));
         if (unk.length) { log(`기록상 가장 빠른 ${best.model}도 ${(best.s.ms / 1000).toFixed(0)}초 → 기록 없는 ${unk[0]} 시험`); return { model: unk[0], ms: null, tried: [], explore: true, score: best.s.ms, total: 0 }; }
       } catch (e) { if (e.name === "AbortError") throw e; }
     }
@@ -1067,7 +1106,7 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-29.1";
+  const VERSION = "2026-10-29.2";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
     VERSION, fmtMs, timingReport, pickFastest, PING_TTL, runSplit, latScore, mergeUse, planSegments, segmentPrompt, fmtClock,

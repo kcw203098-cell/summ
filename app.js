@@ -335,7 +335,7 @@
     const o = store.get(LATKEY, {}), now = ts || Date.now(), lim = now - 24 * 3600 * 1000;
     for (const a of att) {
       const m = a[0], ok = a[2], err = a[3], ft = a[5], end = a[6];
-      const ms = ok && ft != null ? ft : (!ok && err === 503 && end != null ? end : null);   // 429는 속도와 무관하니 넣지 않는다
+      const ms = ok && ft != null ? ft : (!ok && (err === 503 || err === "StallError") && end != null ? end : null);   // 429는 속도와 무관하니 넣지 않는다
       if (ms == null) continue;
       o[m] = (o[m] || []).filter((x) => x.ts > lim).concat([{ ts: now, ms, f: ok ? 0 : 1 }]).slice(-5);
     }
@@ -352,7 +352,7 @@
   }
   // 성능 기록: 요약마다 구간 시간·시도·핑 결과를 한 줄로 남긴다 (제목·키·영상 주소는 넣지 않는다)
   const RUNKEY = "ytnote.runs";
-  const pickCompact = (p) => (p ? { m: p.model, ms: p.ms, c: p.cached ? 1 : 0, t: (p.tried || []).map((x) => [x.model, x.ms != null ? x.ms : x.why]) } : null);
+  const pickCompact = (p) => (p ? { m: p.model, ms: p.ms, c: p.cached ? 1 : 0, h: p.hist ? 1 : 0, x: p.explore ? 1 : 0, sc: p.score != null ? Math.round(p.score) : undefined, t: (p.tried || []).map((x) => [x.model, x.ms != null ? x.ms : x.why]) } : null);
   function recordRun(r) {
     const a = store.get(RUNKEY, []);
     a.push(Object.assign({ t: Date.now(), f: settings.fast ? 1 : 0, lo: settings.low ? 1 : 0, sp: settings.split ? 1 : 0, ap: settings.autoPick ? 1 : 0 }, r));
@@ -569,7 +569,7 @@
       showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
       setStatus("영상 분석 중…" + jobsNote(), "live");
     }
-    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, split: !!settings.split, autoPick: !!settings.autoPick, pickCache: store.get(KKEY, null), duration: 0, notify: !!settings.notify, skip: exhaustedNow(), busy: busyNow(), good: goodModels(), lat: latNow() };
+    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, split: !!settings.split, autoPick: !!settings.autoPick, pickCache: store.get(KKEY, null), duration: 0, notify: !!settings.notify, skip: exhaustedNow(), busy: busyNow(), good: goodModels(), lat: latNow(), stallAfter: settings.stallAfter };
     jobs.set(id, { md: "", title: "" });
     started.set(id, Date.now());
     refreshBar();
