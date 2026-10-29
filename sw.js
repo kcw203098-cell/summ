@@ -2,7 +2,7 @@
 importScripts("core.js");
 const Core = self.Core;
 
-const CACHE = "ytnote-v37";
+const CACHE = "ytnote-v38";
 const SHELL = ["./", "index.html", "core.js", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -82,7 +82,7 @@ async function runJob(job) {
     const msg = Core.friendly(e);
     // 화면이 꺼져 있어도 실패한 주소를 잃지 않게 남긴다 (다음에 앱을 열 때 "실패한 요약"에 올라간다)
     if (e.name !== "AbortError") { try { await Core.idb.put("inbox", { id: job.id, failed: true, message: msg, title: (running.get(job.id) || {}).title || "", ts: Date.now() }); } catch (x) {} }
-    const cs = await broadcast({ type: "error", id: job.id, message: msg, aborted: e.name === "AbortError", att: e.att, pick: e.pick, totalMs: e.totalMs });
+    const cs = await broadcast({ type: "error", id: job.id, message: msg, aborted: e.name === "AbortError", att: e.att, pick: e.pick, totalMs: e.totalMs, use: e.use });
     if (e.name !== "AbortError" && !anyVisible(cs)) await notify(job, "요약 실패", msg.slice(0, 120), job.id);
   } finally {
     running.delete(job.id);

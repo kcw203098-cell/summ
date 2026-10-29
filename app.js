@@ -132,6 +132,7 @@
   // ───────────── 기록 ─────────────
   function saveHistory(e) {
     dropFailed(e.id);
+    if (e.timing && (e.timing.use || (e.timing.pick && e.timing.pick.use))) recordUse(C.mergeUse([e.timing.use, e.timing.pick && e.timing.pick.use]), "sum", e.ts || Date.now(), e.id + ":" + e.ts);
     recordPerf(e);
     const rr = runFromEntry(e); if (rr && !e.recorded) { recordRun(Object.assign({ t: e.ts || Date.now() }, rr)); }
     history = [e].concat(history.filter((h) => h.id !== e.id)).slice(0, 40);
@@ -263,6 +264,7 @@
     else { toast(`요약 완료 · ${short(entry.title)}`); refreshBar(); }
   }
   function onError(id, message, aborted, extra) {
+    if (extra && (extra.use || (extra.pick && extra.pick.use))) recordUse(C.mergeUse([extra.use, extra.pick && extra.pick.use]), "sum", Date.now(), "err:" + id);
     if (!aborted && extra && extra.att) recordLatAtt(extra.att);
     if (!aborted && extra && extra.att) recordRun({ ok: 0, tot: extra.totalMs, att: extra.att, pick: pickCompact(extra.pick), why: String(message).split("\n")[0].slice(0, 80) });
     const ttl = (jobs.get(id) || {}).title || "";
@@ -289,7 +291,7 @@
           refreshBar();
         }
       } else if (m.type === "done") onDone(m.id, m.entry);
-      else if (m.type === "error") onError(m.id, m.message, m.aborted, { att: m.att, pick: m.pick, totalMs: m.totalMs });
+      else if (m.type === "error") onError(m.id, m.message, m.aborted, { att: m.att, pick: m.pick, totalMs: m.totalMs, use: m.use });
       else if (m.type === "model") { settings.model = m.model; saveSettings(); }
       else if (m.type === "retry") { if (viewId === m.id) showRetry(m); }
       else if (m.type === "log") addLog(m.id, m.line);
@@ -368,6 +370,47 @@
     const head = { app: C.VERSION, n: a.length, cfg: { model: settings.model, fast: settings.fast, low: settings.low, split: settings.split, autoPick: settings.autoPick }, ua: (navigator.userAgent.match(/Chrome\/[\d.]+/) || [""])[0], tz: new Date().getTimezoneOffset() };
     return [JSON.stringify(head)].concat(a.map((r) => JSON.stringify(r))).join("\n");
   }
+  // ───────────── 토큰 사용량 ─────────────
+  // 하루는 구글 한도 초기화 기준(태평양시)으로 센다. 이 폰에서 이 앱으로 쓴 것만 센다. 최근 31일 보관
+  const UKEY = "ytnote.usage";
+  const ptDay = (ts) => new Date(ts || Date.now()).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+  function recordUse(map, kind, ts, key) {
+    const u = store.get(UKEY, { days: {}, seen: [] });
+    if (key) { if (u.seen.includes(key)) return; u.seen.push(key); u.seen = u.seen.slice(-80); }
+    const d = ptDay(ts), day = u.days[d] || (u.days[d] = {});
+    for (const m in map) {
+      const k = m + "|" + kind, r = day[k] || (day[k] = { req: 0, f: 0, in: 0, th: 0, out: 0, chars: 0 });
+      for (const f of ["req", "f", "in", "th", "out", "chars"]) r[f] += map[m][f] || 0;
+    }
+    const keep = Object.keys(u.days).sort().slice(-31);
+    for (const d2 of Object.keys(u.days)) if (!keep.includes(d2)) delete u.days[d2];
+    store.set(UKEY, u);
+  }
+  const fmtTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + "k" : String(n || 0));
+  function renderUsage() {
+    const box = document.getElementById("usage"); if (!box) return;
+    const u = store.get(UKEY, { days: {} }), days = Object.keys(u.days).sort().reverse().slice(0, 7);
+    const tot = (d) => { const t = { req: 0, f: 0, in: 0, th: 0, out: 0 }; for (const k in (u.days[d] || {})) for (const f in t) t[f] += u.days[d][k][f] || 0; return t; };
+    const today = ptDay(), rows = [], sum = { req: 0, in: 0, th: 0, out: 0 };
+    for (const d of days) { const t = tot(d); for (const f in sum) sum[f] += t[f]; rows.push(`<tr${d === today ? ' class="now"' : ""}><td>${d.slice(5)}${d === today ? " 오늘" : ""}</td><td>${t.req}</td><td>${fmtTok(t.in)}</td><td>${fmtTok(t.th + t.out)}</td></tr>`); }
+    const pm = [], td = u.days[today] || {};
+    for (const k of Object.keys(td).sort((a, b) => td[b].in - td[a].in)) { const [m, kind] = k.split("|"), r = td[k]; pm.push(`<div class="um"><b>${C.escapeHtml(m)}${kind === "tts" ? " (음성)" : ""}</b><span>요청 ${r.req}${r.f ? " (실패·취소 " + r.f + ")" : ""} · 입력 ${fmtTok(r.in)} · 출력 ${fmtTok(r.th + r.out)}</span></div>`); }
+    box.innerHTML = rows.length
+      ? `<table><thead><tr><th>날짜(태평양시)</th><th>요청</th><th>입력</th><th>출력*</th></tr></thead><tbody>${rows.join("")}<tr class="sum"><td>최근 ${rows.length}일</td><td>${sum.req}</td><td>${fmtTok(sum.in)}</td><td>${fmtTok(sum.th + sum.out)}</td></tr></tbody></table>` +
+        (pm.length ? `<div class="umh">오늘 모델별</div>${pm.join("")}` : "")
+      : "(아직 기록 없음. 요약하면 쌓입니다)";
+  }
+  // 처음 한 번: 이미 쌓인 요약 기록에서 토큰 사용량을 복원한다 (실패한 시도의 토큰은 알 수 없다)
+  (function backfillUsage() {
+    const u0 = store.get(UKEY, { days: {}, seen: [] });
+    if (u0.bf) return;
+    for (const e of history) {
+      const t = e && e.timing;
+      if (!t || t.split || t.use || !t.tok || !e.model) continue;
+      recordUse({ [e.model]: { req: t.tries || 1, in: t.tok.in || 0, th: t.tok.think || 0, out: t.tok.out || 0 } }, "sum", e.ts, "bf:" + e.id + ":" + e.ts);
+    }
+    const u = store.get(UKEY, { days: {}, seen: [] }); u.bf = 1; store.set(UKEY, u);
+  })();
   function recordPerf(e) {
     if (e && e.timing && !e.timing.split) recordLatAtt(e.timing.att, e.ts);
     const t = e && e.timing;
@@ -566,7 +609,7 @@
       }));
       onDone(id, { id, title: res.meta.title || id, md: res.md, ts: Date.now(), model: res.model, ms: res.ms, timing: res.timing, partial: res.partial || 0 });
     } catch (e) {
-      onError(id, C.friendly(e), e.name === "AbortError", { att: e.att, pick: e.pick, totalMs: e.totalMs });
+      onError(id, C.friendly(e), e.name === "AbortError", { att: e.att, pick: e.pick, totalMs: e.totalMs, use: e.use });
     } finally {
       localCtrl = null;
       refreshBar();
@@ -620,6 +663,7 @@
       let blob;
       try {
         blob = await C.tts({ apiKey: settings.apiKey, model, voice: settings.voice, text: player.chunks[k].text, signal: gen.signal });
+        if (blob && blob.__use) recordUse({ [model]: { req: 1, in: blob.__use.in, out: blob.__use.out, chars: blob.__use.chars } }, "tts");
       } catch (err) {
         if (gen.signal.aborted) return;
         if (err.status === 404 || /not found|not supported/i.test(err.message || "")) {
@@ -993,7 +1037,7 @@
     el.sPick.checked = !!settings.autoPick;
     if (el.sTheme) el.sTheme.value = settings.theme || "auto";
     if (el.sSize) el.sSize.value = settings.size || "m";
-    renderLog(); renderPerf();
+    renderLog(); renderPerf(); renderUsage();
     el.sAuto.checked = !!settings.autoClip;
     el.sNotify.checked = !!settings.notify;
     el.sVoice.value = settings.voice;

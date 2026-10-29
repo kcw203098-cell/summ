@@ -491,7 +491,7 @@
       }
       if (lastErr) lastErr.triedCount = new Set(tried).size;
     }
-    if (lastErr) { lastErr.report = report; lastErr.att = compactAtt(stats.attempts); lastErr.totalMs = Date.now() - t0; throw lastErr; }
+    if (lastErr) { lastErr.report = report; lastErr.att = compactAtt(stats.attempts); lastErr.use = useOf(stats.attempts); lastErr.totalMs = Date.now() - t0; throw lastErr; }
     if (!String(body).trim()) throw new Error("빈 응답을 받았습니다. 다시 시도하세요.");
     await Promise.race([metaP, sleep(2500)]);
     const timing = makeTiming(stats, Date.now() - t0, m);
@@ -514,7 +514,7 @@
     return body;
   }
 
-  async function pingModel(apiKey, mm, signal) {
+  async function pingModel(apiKey, mm, signal, box) {
     const t = Date.now();
     const send = (think) => fetch(`${API}/models/${encodeURIComponent(mm)}:generateContent`, {
       method: "POST", signal,
@@ -524,7 +524,7 @@
     let r = await send(true);
     if (r.status === 400) r = await send(false);          // 추론 설정만 거부하는 모델
     if (!r.ok) throw await apiError(r);
-    try { await r.arrayBuffer(); } catch (e) {}
+    try { const j = await r.json(); if (box) box.usage = j.usageMetadata || null; } catch (e) {}
     return Date.now() - t;
   }
 
@@ -585,12 +585,12 @@
     const onAbort = () => ctrl.abort();
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
     const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, timeoutMs);
-    const results = {};
+    const results = {}, boxes = {};
     const winner = await new Promise((resolve) => {
       let pending = cands.length;
       const fin = () => { if (--pending === 0) resolve(null); };
       cands.forEach((mm) => {
-        pingModel(apiKey, mm, ctrl.signal).then((ms) => {
+        pingModel(apiKey, mm, ctrl.signal, (boxes[mm] = {})).then((ms) => {
           results[mm] = { model: mm, ms };
           if (!over) { over = true; resolve({ model: mm, ms }); }
         }, (e) => {
@@ -611,7 +611,9 @@
     tried.forEach((x) => log(`핑 결과 · ${x.model}: ${x.ms != null ? (x.ms / 1000).toFixed(1) + "초" : x.why}`));
     if (!winner) { log("핑 실패 → 설정한 모델로 진행"); return null; }
     log(`핑 선택 · ${winner.model} (${(winner.ms / 1000).toFixed(1)}초)`);
-    return { model: winner.model, ms: winner.ms, tried, cached: false, total: Date.now() - t0 };
+    const use = {};
+    cands.forEach((mm) => { const u = (boxes[mm] && boxes[mm].usage) || {}; const r = use[mm] = newUse(); r.req = 1; if (!(results[mm] && results[mm].ms != null)) r.f = 1; r.in = u.promptTokenCount || 0; r.th = u.thoughtsTokenCount || 0; r.out = u.candidatesTokenCount || 0; });
+    return { model: winner.model, ms: winner.ms, tried, cached: false, total: Date.now() - t0, use };
   }
 
   // ───────────── 긴 영상: 구간을 나눠 동시에 요약 ─────────────
@@ -721,7 +723,7 @@
     }
     const ok = settled.map((s) => (s.status === "fulfilled" ? s.value : null));
     const bad = settled.map((s, i) => (s.status === "rejected" ? { i, e: s.reason } : null)).filter(Boolean);
-    if (!ok.some(Boolean)) throw bad[0].e;
+    if (!ok.some(Boolean)) { bad[0].e.use = mergeUse(bad.map((b) => b.e && b.e.use)); throw bad[0].e; }
     const FAIL = (e) => `⚠ 이 구간은 요약하지 못했습니다. ${friendlyBase(e).split("\n")[0].slice(0, 120)}`;
     bad.forEach(({ i, e }) => { texts[i] = FAIL(e); });
     plan.forEach((r, i) => { if (ok[i]) texts[i] = ok[i].body; });
@@ -733,12 +735,29 @@
     const timing = {
       split: n, total, model, failed: bad.length, segRange: plan,
       segs: ok.map((r) => (r && r.timing) || null),
+      use: mergeUse(ok.map((r) => r && r.timing && r.timing.use).concat(bad.map((b) => b.e && b.e.use))),
     };
     timingReport(timing).forEach((x) => log("⏱ " + x));
     return { meta, url, body, model, ms: total, timing, partial: bad.length, md: buildMarkdown(meta, url, body, null, model) };
   }
 
   // ───────────── 구간별 시간 ─────────────
+  // 토큰 사용량: 모델별 {req 요청 수, f 실패 수, in 입력, th 추론, out 출력}. 실패한 시도라도 응답 끝에 사용량이 왔으면 센다
+  const newUse = () => ({ req: 0, f: 0, in: 0, th: 0, out: 0 });
+  function useOf(att) {
+    const o = {};
+    for (const x of att || []) {
+      const u = x.usage || {}, r = o[x.model] || (o[x.model] = newUse());
+      r.req++; if (x.failed) r.f++;
+      r.in += u.promptTokenCount || 0; r.th += u.thoughtsTokenCount || 0; r.out += u.candidatesTokenCount || 0;
+    }
+    return o;
+  }
+  function mergeUse(list) {
+    const o = {};
+    for (const m of list) for (const k in (m || {})) { const r = o[k] || (o[k] = newUse()); for (const f in r) r[f] += m[k][f] || 0; }
+    return o;
+  }
   // 시도 기록을 짧게: [모델, 옵션, 성공?, 오류, 응답헤더ms, 첫글자ms, 끝ms]
   const compactAtt = (a) => (a || []).map((x) => [x.model, x.level, x.failed ? 0 : 1, x.err || 0, x.headers == null ? null : x.headers, x.firstText == null ? null : x.firstText, x.end == null ? null : x.end].concat(!x.failed || typeof x.err === "number" ? [] : [x.msg || ""]));
   // 마지막으로 성공한 시도를 기준으로 구간을 나눈다
@@ -747,7 +766,7 @@
     const failed = stats.attempts.filter((a) => a.failed).reduce((n, a) => n + (a.end || 0), 0);
     const u = fin.usage || {};
     return {
-      total, model, level: fin.level, low: fin.low, tries: stats.attempts.length, att: compactAtt(stats.attempts),
+      total, model, level: fin.level, low: fin.low, tries: stats.attempts.length, att: compactAtt(stats.attempts), use: useOf(stats.attempts),
       meta: stats.metaMs, list: stats.listMs, wait: stats.waitMs, failed,
       headers: fin.headers, firstText: fin.firstText, end: fin.end, chars: fin.chars,
       tok: { in: u.promptTokenCount, think: u.thoughtsTokenCount, out: u.candidatesTokenCount },
@@ -951,9 +970,14 @@
       });
     }
     if (!r.ok) throw await apiError(r);
-    const found = findAudio(await r.json());
+    const j = await r.json();
+    const found = findAudio(j);
     if (!found) throw new Error("음성 데이터가 응답에 없습니다.");
-    return audioBlobFrom(found);
+    const blob = audioBlobFrom(found);
+    // 사용량 필드 이름은 API마다 달라서 알려진 이름을 차례로 찾는다 (없으면 0)
+    const um = j.usageMetadata || {}, us = j.usage || {};
+    blob.__use = { in: um.promptTokenCount || us.total_input_tokens || us.input_tokens || us.prompt_tokens || 0, out: um.candidatesTokenCount || us.total_output_tokens || us.output_tokens || us.completion_tokens || 0, chars: String(text || "").length };
+    return blob;
   }
 
   function pickTts(models) {
@@ -1043,10 +1067,10 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-25.1";
+  const VERSION = "2026-10-29.1";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
-    VERSION, fmtMs, timingReport, pickFastest, PING_TTL, runSplit, latScore, planSegments, segmentPrompt, fmtClock,
+    VERSION, fmtMs, timingReport, pickFastest, PING_TTL, runSplit, latScore, mergeUse, planSegments, segmentPrompt, fmtClock,
     YT_RE, PROMPT, extractId, normalize, buildMarkdown, mdToHtml, mdToPlain, safeName, pickFlash, parseSSE, escapeHtml,
     fetchMeta, runSummary, friendly, isOverloaded, altFlashModels, isQuota, isDailyQuota, isTokenMinute, resetTime, resetAt, failReason, tts, pickTts, listModels, speechChunks, hash, idb, pcmToWav, findAudio, summaryBody,
   };
