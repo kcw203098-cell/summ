@@ -358,17 +358,19 @@
   // - 빠른 옵션이 거부되면 기본 옵션으로 다시 한다
   // - 모델이 없으면 다른 flash 모델로 바꾸고 설정에 저장한다
   // - 서버 과부하면 같은 모델로 2번 더 기다렸다 하고, 그래도 안 되면 다른 모델로 넘어간다 (설정은 그대로)
-  async function runSummary({ id, apiKey, model, fast: fastIn, low: lowIn, range, metaIn, noLadder, signal, onProgress, onModel, onFastRejected, onLowRejected, onRetry, onLog, skip, onExhausted, busy, good, onBusy, stallAfter }) {
+  async function runSummary({ id, apiKey, model, fast: fastIn, low: lowIn, range, metaIn, noLadder, signal, onProgress, onModel, onFastRejected, onLowRejected, onRetry, onLog, skip, onExhausted, busy, good, slow, onBusy, stallAfter }) {
     skip = (skip || []).slice();
     busy = (busy || []).slice();    // 최근 서버 과부하(503)였던 모델: 잠시 뒤로 미룬다
-    good = (good || []).slice();    // 최근 성공한 모델 (최근 것부터)
+    good = (good || []).slice();    // 기록상 마감 안에 오는 모델 (빠른 순)
+    slow = (slow || []).slice();    // 기록상 마감보다 느린 모델: 기록 없는 모델보다도 뒤로
     const markBusy = (mm) => { if (!busy.includes(mm)) { busy.push(mm); onBusy && onBusy(mm); } };
     // 과부하 모델은 뒤로, 최근 성공한 모델은 앞으로
     const orderAlts = (list) => {
       const gi = (x) => { const k = good.indexOf(x); return k < 0 ? 99 : k; };
       // 기록이 없는 모델 중에서는 lite를 먼저 (실제 기록: lite 중앙값 14.8초, 같은 시간대 다른 flash는 107초 이상인 경우가 많았다)
       const lt = (x) => (/lite/.test(x) ? 0 : 1);
-      return list.map((x, i) => ({ x, i })).sort((a, b) => (busy.includes(a.x) - busy.includes(b.x)) || (gi(a.x) - gi(b.x)) || (lt(a.x) - lt(b.x)) || (a.i - b.i)).map((o) => o.x);
+      const sl = (x) => (slow.includes(x) ? 1 : 0);
+      return list.map((x, i) => ({ x, i })).sort((a, b) => (busy.includes(a.x) - busy.includes(b.x)) || (sl(a.x) - sl(b.x)) || (gi(a.x) - gi(b.x)) || (lt(a.x) - lt(b.x)) || (a.i - b.i)).map((o) => o.x);
     };
     const report = [];   // 모델별 실패 이유
     const markExhausted = (mm, e) => {
@@ -570,13 +572,18 @@
   // 반환: { model, ms, tried: [{model, ms|why}], cached, total } 또는 null (전부 실패·시간 초과)
   // 모델별 실제 "첫 글자까지" 시간 기록으로 속도를 예측한다. 핑은 실제 속도와 달랐다(핑 1.6초 모델이 실제로는 37~150초).
   // 최근 24시간, 최근 5개의 중앙값 (이상치 한 번에 흔들리지 않게)
-  const LAT_WINDOW = 24 * 3600 * 1000, LAT_N = 5, EXPLORE_MS = 60000;
+  const LAT_WINDOW = 24 * 3600 * 1000, LAT_STALE = 7 * 24 * 3600 * 1000, LAT_N = 5, EXPLORE_MS = 60000, FAIL_MS = 60000;
+  // 24시간 안의 기록이 없으면 7일까지의 오래된 기록을 쓴다 (기록이 없어 느린 기본 모델로 시작하는 것보다 낫다)
+  // 실패(503·응답 지연) 기록은 걸린 시간이 짧아도 60초로 센다. 빨리 실패한 모델이 빨라 보이면 안 된다
   function latScore(samples, now) {
     now = now || Date.now();
-    const v = (samples || []).filter((x) => x && now - x.ts < LAT_WINDOW).slice(-LAT_N).map((x) => x.ms).sort((a, b) => a - b);
+    const all = (samples || []).filter((x) => x);
+    let src = all.filter((x) => now - x.ts < LAT_WINDOW), stale = false;
+    if (!src.length) { src = all.filter((x) => now - x.ts < LAT_STALE); stale = src.length > 0; }
+    const v = src.slice(-LAT_N).map((x) => (x.f ? Math.max(x.ms, FAIL_MS) : x.ms)).sort((a, b) => a - b);
     if (!v.length) return null;
     const m = v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
-    return { ms: m, n: v.length };
+    return { ms: m, n: v.length, stale };
   }
   async function pickByHistory(args, log) {
     const lat = args.lat || {};
@@ -593,8 +600,8 @@
         if (unk.length) { log(`기록상 가장 빠른 ${best.model}도 ${(best.s.ms / 1000).toFixed(0)}초 → 기록 없는 ${unk[0]} 시험`); return { model: unk[0], ms: null, tried: [], explore: true, score: best.s.ms, total: 0 }; }
       } catch (e) { if (e.name === "AbortError") throw e; }
     }
-    log(`기록으로 선택 · ${best.model} (최근 ${best.s.n}회 중앙값 ${(best.s.ms / 1000).toFixed(1)}초)`);
-    return { model: best.model, ms: null, tried: [], hist: true, score: best.s.ms, n: best.s.n, total: 0 };
+    log(`기록으로 선택 · ${best.model} (${best.s.stale ? "오래된 기록 " : "최근 "}${best.s.n}회 중앙값 ${(best.s.ms / 1000).toFixed(1)}초)`);
+    return { model: best.model, ms: null, tried: [], hist: true, stale: !!best.s.stale, score: best.s.ms, n: best.s.n, total: 0 };
   }
   async function pickFastest(args) {
     const { apiKey, model, signal, onLog, onExhausted, onBusy, pickCache } = args;
@@ -1106,7 +1113,7 @@
     del: (store, k) => idbDo(store, "readwrite", (s) => s.delete(k)),
   };
 
-  const VERSION = "2026-10-29.2";
+  const VERSION = "2026-11-03.1";
   const fmtMs = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; };
   const api = {
     VERSION, fmtMs, timingReport, pickFastest, PING_TTL, runSplit, latScore, mergeUse, planSegments, segmentPrompt, fmtClock,

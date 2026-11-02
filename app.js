@@ -329,19 +329,22 @@
   const busyNow = () => { const o = store.get(BKEY, {}), now = Date.now(); return Object.keys(o).filter((k) => o[k] > now); };
   function markBusy(model) { const o = store.get(BKEY, {}); o[model] = Date.now() + 10 * 60 * 1000; store.set(BKEY, o); }
   // 모델별 실제 속도 기록 (첫 글자까지 걸린 시간, 최근 5개). 성공한 요약과 503으로 낭비한 시간을 함께 쓴다
-  const latNow = () => { const o = store.get(LATKEY, {}), lim = Date.now() - 24 * 3600 * 1000, out = {}; for (const k in o) { const a = (o[k] || []).filter((x) => x.ts > lim); if (a.length) out[k] = a; } return out; };
+  const latNow = () => { const o = store.get(LATKEY, {}), lim = Date.now() - 7 * 24 * 3600 * 1000, out = {}; for (const k in o) { const a = (o[k] || []).filter((x) => x.ts > lim); if (a.length) out[k] = a; } return out; };
   function recordLatAtt(att, ts) {
     if (!Array.isArray(att)) return;
-    const o = store.get(LATKEY, {}), now = ts || Date.now(), lim = now - 24 * 3600 * 1000;
+    const o = store.get(LATKEY, {}), now = ts || Date.now(), lim = now - 7 * 24 * 3600 * 1000;
     for (const a of att) {
       const m = a[0], ok = a[2], err = a[3], ft = a[5], end = a[6];
-      const ms = ok && ft != null ? ft : (!ok && (err === 503 || err === "StallError") && end != null ? end : null);   // 429는 속도와 무관하니 넣지 않는다
+      const ms = ok && ft != null ? ft : (!ok && (err === 503 || err === "StallError" || /high demand|overload/i.test(String(a[7] || ""))) && end != null ? end : null);   // 429는 속도와 무관하니 넣지 않는다
       if (ms == null) continue;
       o[m] = (o[m] || []).filter((x) => x.ts > lim).concat([{ ts: now, ms, f: ok ? 0 : 1 }]).slice(-5);
     }
     store.set(LATKEY, o);
   }
-  const goodModels = () => { const l = latNow(), sc = (k) => { const r = C.latScore(l[k]); return r ? r.ms : 1e9; }; return Object.keys(l).filter((k) => C.latScore(l[k])).sort((a, b) => sc(a) - sc(b)); };
+  const stallMsNow = () => (settings.stallAfter == null ? 45000 : settings.stallAfter) || 45000;
+  const latRank = () => { const l = latNow(), sc = (k) => { const r = C.latScore(l[k]); return r ? r.ms : 1e9; }; return Object.keys(l).filter((k) => C.latScore(l[k])).sort((a, b) => sc(a) - sc(b)).map((k) => ({ k, ms: sc(k) })); };
+  const goodModels = () => latRank().filter((o) => o.ms <= stallMsNow()).map((o) => o.k);
+  const slowModels = () => latRank().filter((o) => o.ms > stallMsNow()).map((o) => o.k);
   // 핑 결과: 선택한 모델은 20분 동안 재사용하고, 모델별 핑 시간은 설정 화면에 보여 준다
   function recordPick(p) {
     if (!p || p.cached || p.hist || p.explore) return;
@@ -569,7 +572,7 @@
       showWaiting("영상을 분석하고 있습니다. 앱을 나가도 계속 요약하고, 끝나면 알림으로 알려 줍니다.");
       setStatus("영상 분석 중…" + jobsNote(), "live");
     }
-    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, split: !!settings.split, autoPick: !!settings.autoPick, pickCache: store.get(KKEY, null), duration: 0, notify: !!settings.notify, skip: exhaustedNow(), busy: busyNow(), good: goodModels(), lat: latNow(), stallAfter: settings.stallAfter };
+    const job = { id, apiKey: settings.apiKey, model: settings.model || DEFAULTS.model, fast: !!settings.fast, low: !!settings.low, split: !!settings.split, autoPick: !!settings.autoPick, pickCache: store.get(KKEY, null), duration: 0, notify: !!settings.notify, skip: exhaustedNow(), busy: busyNow(), good: goodModels(), slow: slowModels(), lat: latNow(), stallAfter: settings.stallAfter };
     jobs.set(id, { md: "", title: "" });
     started.set(id, Date.now());
     refreshBar();
