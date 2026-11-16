@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex"><title>Brave로 열기</title>
+<style>body{font-family:system-ui,sans-serif;background:#111;color:#eee;margin:0;padding:32px 20px;text-align:center}
+a.b{display:block;margin:16px auto;max-width:320px;padding:14px;border-radius:10px;background:#fb542b;color:#fff;font-size:18px;text-decoration:none}
+a.s{display:block;margin:12px auto;color:#9ab}p{color:#9ab;font-size:14px}</style></head>
+<body>
+<h2>유튜브 영상을 Brave로 열기</h2>
+<p id="msg">자동으로 열리지 않으면 아래 버튼을 누르세요.</p>
+<a class="b" id="brave" href="#">🦁 Brave로 열기</a>
+<a class="s" id="plain" href="#">기본 브라우저로 열기</a>
+<script>
+(function () {
+  // 영상 ID 11자만 허용한다. 다른 주소로는 넘기지 않는다 (열린 리디렉션 방지)
+  var v = new URLSearchParams(location.search).get("v") || "";
+  if (!/^[\w-]{11}$/.test(v)) { document.getElementById("msg").textContent = "영상 주소가 올바르지 않습니다."; document.getElementById("brave").style.display = document.getElementById("plain").style.display = "none"; return; }
+  var yt = "https://www.youtube.com/watch?v=" + v, enc = encodeURIComponent(yt), ua = navigator.userAgent;
+  var target;
+  if (/Android/i.test(ua)) target = "intent://www.youtube.com/watch?v=" + v + "#Intent;scheme=https;package=com.brave.browser;S.browser_fallback_url=" + enc + ";end";   // Brave 가 없으면 기본 브라우저로
+  else if (/iPhone|iPad|iPod/i.test(ua)) target = "brave://open-url?url=" + enc;
+  else target = yt;
+  document.getElementById("brave").href = target;
+  document.getElementById("plain").href = yt;
+  setTimeout(function () { location.href = target; }, 300);   // 앱 안 브라우저가 막으면 위 버튼을 직접 누른다
+})();
+</script></body></html>
