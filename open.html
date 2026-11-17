@@ -21,6 +21,6 @@ a.s{display:block;margin:12px auto;color:#9ab}p{color:#9ab;font-size:14px}</styl
   else target = yt;
   document.getElementById("brave").href = target;
   document.getElementById("plain").href = yt;
-  setTimeout(function () { location.href = target; }, 300);   // 앱 안 브라우저가 막으면 위 버튼을 직접 누른다
+  location.replace(target);   // 바로 이동한다. 앱 안 브라우저가 막으면 위 버튼을 직접 누른다
 })();
 </script></body></html>
